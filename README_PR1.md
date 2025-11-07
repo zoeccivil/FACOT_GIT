@@ -1,34 +1,34 @@
-# FACOT - PR1: Unified Document Engine
+# FACOT - PR1: Motor de Documentos Unificado
 
-## Quick Start
+## Inicio Rápido
 
-This pull request implements **Phase 1** of the FACOT refactoring project.
+Este pull request implementa la **Fase 1** del proyecto de refactorización de FACOT.
 
-### What's New
+### Novedades
 
-Three new files in `services/`:
-- `company_profile_service.py` - Centralized company data management
-- `unit_resolver.py` - Intelligent item unit resolution
-- `__init__.py` - Package exports
+Tres archivos nuevos en `services/`:
+- `company_profile_service.py` - Gestión centralizada de datos de empresa
+- `unit_resolver.py` - Resolución inteligente de unidades de ítems
+- `__init__.py` - Exportaciones del paquete
 
-### What Changed
+### Cambios Realizados
 
-- ✅ Fixed CSS bug in quotation template (DOMException)
-- ✅ Enhanced unit resolution in preview dialogs
-- ✅ Added project .gitignore
+- ✅ Corregido error CSS en plantilla de cotización (DOMException)
+- ✅ Mejorada resolución de unidades en diálogos de vista previa
+- ✅ Agregado .gitignore al proyecto
 
-### What to Test
+### Qué Probar
 
-1. **Logo Resolution:** Create invoice/quotation with company logo
-2. **Unit Resolution:** Add items without units, verify they populate from DB
-3. **Quotation Colors:** Generate quotation PDF with custom branding
+1. **Resolución de Logo:** Crear factura/cotización con logo de empresa
+2. **Resolución de Unidades:** Agregar ítems sin unidades, verificar que se llenen desde la BD
+3. **Colores de Cotización:** Generar PDF de cotización con branding personalizado
 
-### Documentation
+### Documentación
 
-- `PR1_SUMMARY.md` - Technical implementation details
-- `IMPLEMENTATION_COMPLETE.md` - Metrics, testing checklist, and final summary
+- `PR1_RESUMEN.md` - Detalles técnicos de implementación
+- `IMPLEMENTACION_COMPLETA.md` - Métricas, lista de pruebas y resumen final
 
-## Usage Examples
+## Ejemplos de Uso
 
 ### CompanyProfileService
 
@@ -38,9 +38,9 @@ from services import CompanyProfileService
 service = CompanyProfileService(logic_controller)
 profile = service.get_company_profile(company_id)
 
-print(profile['name'])      # Company name
-print(profile['logo_uri'])  # Resolved logo path (file:///)
-print(profile['address'])   # Normalized address
+print(profile['name'])      # Nombre de la empresa
+print(profile['logo_uri'])  # Ruta del logo resuelto (file:///)
+print(profile['address'])   # Dirección normalizada
 ```
 
 ### UnitResolver
@@ -50,93 +50,93 @@ from services import UnitResolver
 
 resolver = UnitResolver(logic_controller)
 
-# Single item
+# Ítem individual
 unit = resolver.resolve_unit(
     item_code="CEMENT01",
-    item_name="Portland Cement"
+    item_name="Cemento Portland"
 )
 
-# Batch processing
+# Procesamiento por lotes
 items = [
-    {"code": "ITEM1", "description": "Item 1", "unit": ""},
-    {"code": "ITEM2", "description": "Item 2", "unit": ""},
+    {"code": "ITEM1", "description": "Ítem 1", "unit": ""},
+    {"code": "ITEM2", "description": "Ítem 2", "unit": ""},
 ]
-resolver.resolve_items(items)  # Units filled in-place
+resolver.resolve_items(items)  # Unidades llenadas en el lugar
 ```
 
-## Architecture
+## Arquitectura
 
 ```
 FACOT/
-├── services/                    # New services layer
+├── services/                    # Nueva capa de servicios
 │   ├── __init__.py
 │   ├── company_profile_service.py
 │   └── unit_resolver.py
 ├── dialogs/
-│   ├── invoice_preview_dialog.py      # Updated
-│   └── quotation_preview_dialog.py    # Updated
+│   ├── invoice_preview_dialog.py      # Actualizado
+│   └── quotation_preview_dialog.py    # Actualizado
 ├── templates/
-│   └── quotation_template.html        # Fixed
-├── PR1_SUMMARY.md                     # Technical docs
-├── IMPLEMENTATION_COMPLETE.md         # Final summary
-└── README_PR1.md                      # This file
+│   └── quotation_template.html        # Corregido
+├── PR1_RESUMEN.md                     # Documentación técnica
+├── IMPLEMENTACION_COMPLETA.md         # Resumen final
+└── README_PR1.md                      # Este archivo
 ```
 
-## Backward Compatibility
+## Compatibilidad Hacia Atrás
 
-✅ **100% backward compatible**
-- No breaking changes
-- Services are opt-in
-- Graceful degradation if unavailable
-- No database migrations required
+✅ **100% compatible hacia atrás**
+- Sin cambios que rompan funcionalidad existente
+- Los servicios son opcionales
+- Degradación elegante si no están disponibles
+- No se requieren migraciones de base de datos
 
-## Quality Metrics
+## Métricas de Calidad
 
-- ✅ CodeQL Security: **0 vulnerabilities**
-- ✅ Syntax: All files validated
-- ✅ Documentation: **500+ lines**
-- ✅ Tests: Import and syntax checks pass
+- ✅ Seguridad CodeQL: **0 vulnerabilidades**
+- ✅ Sintaxis: Todos los archivos validados
+- ✅ Documentación: **500+ líneas**
+- ✅ Pruebas: Importaciones y sintaxis pasan
 
-## Checklist for Review
+## Lista de Verificación para Revisión
 
-**Code Quality:**
-- [x] All new code has docstrings
-- [x] No security vulnerabilities
-- [x] Follows existing code style
-- [x] Syntax validated
+**Calidad del Código:**
+- [x] Todo el código nuevo tiene docstrings
+- [x] Sin vulnerabilidades de seguridad
+- [x] Sigue el estilo de código existente
+- [x] Sintaxis validada
 
-**Functionality:**
-- [x] Services work independently
-- [x] Integration with dialogs works
-- [x] Backward compatible
-- [x] Graceful error handling
+**Funcionalidad:**
+- [x] Los servicios funcionan independientemente
+- [x] La integración con diálogos funciona
+- [x] Compatible hacia atrás
+- [x] Manejo elegante de errores
 
-**Documentation:**
-- [x] Technical docs complete
-- [x] Usage examples provided
-- [x] Testing checklist included
-- [x] Non-technical summary for users
+**Documentación:**
+- [x] Documentación técnica completa
+- [x] Ejemplos de uso provistos
+- [x] Lista de pruebas incluida
+- [x] Resumen no técnico para usuarios
 
-## Next Steps After Merge
+## Próximos Pasos Después de Fusionar
 
-Once merged, this PR enables:
-- PR2: Item table UX improvements
-- PR3: Quotation states workflow
-- PR4: Email functionality
-- PR5+: Future enhancements
+Una vez fusionado, este PR habilita:
+- PR2: Mejoras de UX en tabla de ítems
+- PR3: Flujo de estados de cotización
+- PR4: Funcionalidad de email
+- PR5+: Mejoras futuras
 
-## Questions?
+## ¿Preguntas?
 
-See detailed documentation:
-- **Technical Details:** `PR1_SUMMARY.md`
-- **Final Summary:** `IMPLEMENTATION_COMPLETE.md`
-- **Code Examples:** This file or inline docstrings
+Ver documentación detallada:
+- **Detalles Técnicos:** `PR1_RESUMEN.md`
+- **Resumen Final:** `IMPLEMENTACION_COMPLETA.md`
+- **Ejemplos de Código:** Este archivo o docstrings en línea
 
 ---
 
-**Status:** ✅ Ready for Review
-**Security:** ✅ 0 Vulnerabilities
-**Tests:** ✅ Passing
-**Docs:** ✅ Complete
+**Estado:** ✅ Listo para Revisión
+**Seguridad:** ✅ 0 Vulnerabilidades
+**Pruebas:** ✅ Pasando
+**Docs:** ✅ Completo
 
-Let's make FACOT better! 🚀
+¡Hagamos FACOT mejor! 🚀
