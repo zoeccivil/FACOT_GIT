@@ -199,14 +199,38 @@ def _compute_due_date_if_missing(invoice: Dict[str, Any]) -> None:
             pass
 
 
-def _ensure_units(invoice: Dict[str, Any]) -> None:
+def _ensure_units(invoice: Dict[str, Any], logic_controller=None) -> None:
+    """
+    En cada ítem, asegura que 'unit' tenga valor.
+    
+    Resolución de unidad por prioridad:
+    1. Si el ítem ya tiene 'unit', lo usa
+    2. Busca por código exacto en la BD
+    3. Busca por nombre (get_items_like) con coincidencia parcial
+    4. Fallback a 'UND' si no se encuentra
+    
+    Si logic_controller está disponible, usa el servicio UnitResolver para
+    una resolución más robusta.
+    """
     try:
         items = invoice.get("items") or []
+        
+        # Si tenemos logic_controller, usar el servicio UnitResolver
+        if logic_controller:
+            try:
+                from services import UnitResolver
+                resolver = UnitResolver(logic_controller)
+                resolver.resolve_items(items)
+                return
+            except Exception as e:
+                print(f"[ENSURE_UNITS] Could not use UnitResolver: {e}, falling back to simple method")
+        
+        # Fallback simple si no hay logic_controller o falla el resolver
         for it in items:
             if not (it.get("unit") or "").strip():
-                it["unit"] = "UNID"
-    except Exception:
-        pass
+                it["unit"] = "UND"
+    except Exception as e:
+        print(f"[ENSURE_UNITS] Error: {e}")
 
 
 def _local_build_html_with_json_block(template_path: str, company: Dict[str, Any], tpl: Dict[str, Any], quotation: Dict[str, Any]) -> str:
@@ -751,6 +775,6 @@ class QuotationPreviewDialog(QDialog):
         # DEBUG después de calcular
         print(f"[QUOT-DUE] AFTER q.due='{quotation.get('due_date','')}'")
 
-        _ensure_units(quotation)
+        _ensure_units(quotation, logic_controller=logic_ctrl)
 
         return company, tpl, quotation
