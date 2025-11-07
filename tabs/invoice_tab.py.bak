@@ -1,0 +1,544 @@
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QLineEdit, QPushButton,
+    QDateEdit, QCheckBox, QTableWidget, QTableWidgetItem, QMessageBox, QFileDialog,
+    QHeaderView, QGroupBox, QFormLayout, QDialog
+)
+from PyQt6.QtCore import QDate, Qt, pyqtSignal
+from constants import NCF_TYPES, ITBIS_RATE, DEFAULT_CURRENCY
+# Al inicio de tabs/invoice_tab.py (reemplaza la importación antigua)
+# Si antes tenías: from utils import generate_invoice_pdf, generate_invoice_excel
+# Cámbialo por esto:
+
+from utils.quotation_templates import (
+    generate_quotation_excel as generate_invoice_excel,
+    generate_quotation_pdf as generate_invoice_pdf,
+)
+
+
+from dialogs.item_picker_dialog import ItemPickerDialog
+from PyQt6.QtWidgets import QInputDialog
+from typing import List, Dict
+from PyQt6.QtWidgets import QFileDialog, QMessageBox
+from typing import List, Dict
+from PyQt6.QtWidgets import QFileDialog, QMessageBox
+# Integración automática usando plantillas por empresa
+from utils.template_integration import (
+    export_invoice_excel_with_template,
+    export_invoice_pdf_with_template,
+)
+from constants import ITBIS_RATE
+# Pegar estas líneas en la cabecera (imports) de tabs/invoice_tab.py
+# Reemplaza o añade junto al resto de imports al inicio del archivo.
+
+from PyQt6.QtWidgets import QPushButton
+from dialogs.template_editor_dialog import TemplateEditorDialog
+# nota: QFileDialog, QMessageBox y demás deberían ya estar importados en ese archivo
+
+
+from __future__ import annotations
+
+# imports estándar (ejemplo; conserva el resto de tus imports existentes)
+import os
+from typing import List, Dict, Optional
+
+from xml.sax.saxutils import escape
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.units import mm, inch
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, Flowable, KeepTogether
+)
+from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
+
+class InvoiceTab(QWidget):
+    invoice_saved = pyqtSignal(int)
+
+    def __init__(self, logic, get_current_company_callable, parent=None):
+        super().__init__(parent)
+        self.logic = logic
+        self.get_current_company = get_current_company_callable
+        self._build_ui()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Estilo de grupos
+        self.setStyleSheet("""
+        QGroupBox {
+            border: 1px solid #555; border-radius: 6px; margin-top: 10px;
+            padding: 8px 10px;
+        }
+        QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 6px; }
+        """)
+
+        # BOTÓN: Editar plantilla (ubicado arriba, usa get_current_company())
+        top_btn_row = QHBoxLayout()
+        self.edit_template_btn = QPushButton("Editar plantilla")
+        self.edit_template_btn.setToolTip("Editar plantilla para la empresa seleccionada")
+        top_btn_row.addWidget(self.edit_template_btn)
+        top_btn_row.addStretch(1)
+        layout.addLayout(top_btn_row)
+        self.edit_template_btn.clicked.connect(self._on_edit_template)
+
+        # 1. Datos factura
+        datos_box = QGroupBox("1. Datos de la Factura")
+        datos_form = QFormLayout(datos_box)
+
+        top_row = QHBoxLayout()
+        self.ncf_type_combo = QComboBox(); self.ncf_type_combo.addItems(NCF_TYPES.keys())
+        self.ncf_type_combo.currentIndexChanged.connect(self._update_ncf_sequence)
+        self.ncf_number_edit = QLineEdit(); self.ncf_number_edit.setReadOnly(True)
+        self.invoice_date = QDateEdit(QDate.currentDate()); self.invoice_date.setCalendarPopup(True)
+        self.invoice_due_date = QDateEdit(QDate.currentDate()); self.invoice_due_date.setCalendarPopup(True)
+        self.currency_combo = QComboBox(); self.currency_combo.addItems(["RD$", "USD", "EUR"]); self.currency_combo.setCurrentText(DEFAULT_CURRENCY)
+        self.exchange_rate_edit = QLineEdit("1.00"); self.exchange_rate_edit.setVisible(False)
+        self.currency_combo.currentIndexChanged.connect(self._on_currency_change)
+
+        top_row.addWidget(QLabel("Tipo de NCF:")); top_row.addWidget(self.ncf_type_combo)
+        top_row.addWidget(QLabel("NCF Asignado:")); top_row.addWidget(self.ncf_number_edit, 1)
+        top_row.addWidget(QLabel("Fecha:")); top_row.addWidget(self.invoice_date)
+        top_row.addWidget(QLabel("Vencimiento:")); top_row.addWidget(self.invoice_due_date)
+        top_row.addWidget(QLabel("Moneda:")); top_row.addWidget(self.currency_combo)
+        top_row.addWidget(QLabel("Tasa:")); top_row.addWidget(self.exchange_rate_edit)
+        datos_form.addRow(top_row)
+        layout.addWidget(datos_box)
+
+        # 2. Cliente
+        cliente_box = QGroupBox("2. Datos del Cliente")
+        cliente_row = QHBoxLayout(cliente_box)
+        self.client_rnc = QLineEdit(); self.client_rnc.setPlaceholderText("Buscar RNC/Cédula…")
+        self.client_name = QLineEdit(); self.client_name.setPlaceholderText("Buscar nombre/razón social…")
+        self.suggestion_combo = QComboBox(); self.suggestion_combo.hide(); self.suggestion_combo.setEditable(False)
+        self.client_rnc.textChanged.connect(lambda: self._suggest_third_party('rnc'))
+        self.client_name.textChanged.connect(lambda: self._suggest_third_party('name'))
+        self.suggestion_combo.activated.connect(self._select_suggestion)
+
+        cliente_row.addWidget(QLabel("RNC/Cédula:")); cliente_row.addWidget(self.client_rnc)
+        cliente_row.addWidget(QLabel("Nombre/Razón Social:")); cliente_row.addWidget(self.client_name)
+        cliente_row.addWidget(self.suggestion_combo)
+        layout.addWidget(cliente_box)
+
+        # 3. Detalles
+        detalles_box = QGroupBox("3. Detalles de la Factura")
+        detalles_layout = QVBoxLayout(detalles_box)
+
+        actions = QHBoxLayout()
+        btn_add_items = QPushButton("Agregar ítems…")
+        btn_add_items.clicked.connect(self._open_item_picker)
+        btn_remove_item = QPushButton("Eliminar detalle seleccionado")
+        btn_remove_item.clicked.connect(self._remove_invoice_item_row)
+        actions.addWidget(btn_add_items)
+        actions.addWidget(btn_remove_item)
+        actions.addStretch(1)
+        detalles_layout.addLayout(actions)
+
+        self.invoice_items_table = QTableWidget(0, 7)
+        self.invoice_items_table.setHorizontalHeaderLabels(["#", "Código", "Descripción", "Unidad", "Cantidad", "Precio Unitario", "Subtotal"])
+        self.invoice_items_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.invoice_items_table.verticalHeader().setVisible(False)
+        detalles_layout.addWidget(self.invoice_items_table)
+        layout.addWidget(detalles_box)
+
+        # 4. Totales
+        totales_box = QGroupBox("Totales")
+        totales_row = QHBoxLayout(totales_box)
+        self.apply_itbis_checkbox = QCheckBox("Aplicar ITBIS (18%)"); self.apply_itbis_checkbox.setChecked(True)
+        self.apply_itbis_checkbox.stateChanged.connect(self._recalculate_invoice_totals)
+        self.subtotal_label = QLabel("Subtotal: RD$ 0.00")
+        self.itbis_label = QLabel("ITBIS: RD$ 0.00")
+        self.total_label = QLabel("Total: RD$ 0.00")
+        totales_row.addWidget(self.apply_itbis_checkbox)
+        totales_row.addStretch(1)
+        totales_row.addWidget(self.subtotal_label)
+        totales_row.addWidget(self.itbis_label)
+        totales_row.addWidget(self.total_label)
+        layout.addWidget(totales_box)
+
+        # 5. Acciones
+        btn_generate_excel = QPushButton("Vista Previa / Generar Factura en Excel")
+        btn_generate_excel.clicked.connect(self._generate_invoice_excel)
+        btn_generate_pdf = QPushButton("Generar Factura en PDF")
+        btn_generate_pdf.clicked.connect(self._generate_invoice_pdf)
+        btn_save_invoice = QPushButton("Guardar en Base de Datos")
+        btn_save_invoice.clicked.connect(self._save_invoice)
+        layout.addWidget(btn_generate_excel)
+        layout.addWidget(btn_generate_pdf)
+        layout.addWidget(btn_save_invoice)
+
+        self._update_ncf_sequence()
+
+    # Añadir ítems desde el diálogo
+    def _open_item_picker(self):
+        dlg = ItemPickerDialog(self, title="Agregar ítems a la Factura")
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        items = dlg.get_selected_items()
+        for it in items:
+            self._append_row(it["codigo"], it["nombre"], it["unidad"], it["cantidad"], it["precio"], it["subtotal"])
+        self._recalculate_invoice_totals()
+
+    def _append_row(self, code, name, unit, qty, price, subtotal=None):
+        if subtotal is None:
+            subtotal = qty * price
+        row = self.invoice_items_table.rowCount()
+        self.invoice_items_table.insertRow(row)
+        self.invoice_items_table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
+        self.invoice_items_table.setItem(row, 1, QTableWidgetItem(code))
+        self.invoice_items_table.setItem(row, 2, QTableWidgetItem(name))
+        self.invoice_items_table.setItem(row, 3, QTableWidgetItem(unit))
+        self.invoice_items_table.setItem(row, 4, QTableWidgetItem(f"{qty:.2f}"))
+        self.invoice_items_table.setItem(row, 5, QTableWidgetItem(f"{price:.2f}"))
+        self.invoice_items_table.setItem(row, 6, QTableWidgetItem(f"{subtotal:.2f}"))
+
+    # Resto: idéntico a tu versión modular anterior (sugerencias, NCF, totales, export, guardar)
+    def on_company_change(self):
+        self._clear_invoice_form()
+        self._update_ncf_sequence()
+
+    def _suggest_third_party(self, search_by):
+        query = self.client_rnc.text() if search_by == "rnc" else self.client_name.text()
+        if len(query) < 2:
+            self.suggestion_combo.hide(); return
+        results = self.logic.search_third_parties(query, search_by=search_by) if hasattr(self.logic, "search_third_parties") else []
+        self.suggestion_combo.clear()
+        for item in results:
+            self.suggestion_combo.addItem(f"{item['rnc']} - {item['name']}")
+        self.suggestion_combo.setVisible(bool(results))
+
+    def _select_suggestion(self, idx):
+        val = self.suggestion_combo.currentText()
+        if " - " in val:
+            rnc, name = val.split(" - ", 1)
+            self.client_rnc.setText(rnc); self.client_name.setText(name)
+        self.suggestion_combo.hide()
+
+    def _update_ncf_sequence(self):
+        company = self.get_current_company()
+        if not company:
+            self.ncf_number_edit.clear(); return
+        prefix = NCF_TYPES.get(self.ncf_type_combo.currentText())
+        next_ncf = self.logic.get_next_ncf(company['id'], prefix) if prefix and hasattr(self.logic, "get_next_ncf") else ""
+        self.ncf_number_edit.setText(next_ncf)
+
+    def _remove_invoice_item_row(self):
+        r = self.invoice_items_table.currentRow()
+        if r < 0:
+            QMessageBox.warning(self, "Sin Selección", "Selecciona un detalle para eliminar."); return
+        self.invoice_items_table.removeRow(r)
+        for i in range(self.invoice_items_table.rowCount()):
+            self.invoice_items_table.setItem(i, 0, QTableWidgetItem(str(i+1)))
+        self._recalculate_invoice_totals()
+
+    def _recalculate_invoice_totals(self):
+        subtotal = 0.0
+        for r in range(self.invoice_items_table.rowCount()):
+            cell = self.invoice_items_table.item(r, 6)
+            try:
+                subtotal += float((cell.text() if cell else "0").replace(",", ""))
+            except Exception:
+                pass
+        itbis = subtotal * ITBIS_RATE if self.apply_itbis_checkbox.isChecked() else 0.0
+        total = subtotal + itbis
+        self.subtotal_label.setText(f"Subtotal: RD$ {subtotal:,.2f}")
+        self.itbis_label.setText(f"ITBIS ({ITBIS_RATE*100:.0f}%): RD$ {itbis:,.2f}")
+        self.total_label.setText(f"Total: RD$ {total:,.2f}")
+
+    def _generate_invoice_excel(self):
+        company = self.get_current_company()
+        if not company:
+            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida"); return
+        data = {
+            "company_id": company['id'],
+            "invoice_date": self.invoice_date.date().toString("yyyy-MM-dd"),
+            "invoice_number": self.ncf_number_edit.text(),
+            "client_name": self.client_name.text(),
+            "client_rnc": self.client_rnc.text(),
+            "currency": self.currency_combo.currentText(),
+        }
+        items = []
+        for r in range(self.invoice_items_table.rowCount()):
+            desc = self.invoice_items_table.item(r, 2)
+            qty = self.invoice_items_table.item(r, 4)
+            price = self.invoice_items_table.item(r, 5)
+            try:
+                qty_val = float(qty.text().replace(",", "")) if qty and qty.text().strip() else 0.0
+                price_val = float(price.text().replace(",", "")) if price and price.text().strip() else 0.0
+            except Exception:
+                qty_val = 0.0; price_val = 0.0
+            items.append({"description": desc.text() if desc else "", "quantity": qty_val, "unit_price": price_val})
+        fn, _ = QFileDialog.getSaveFileName(self, "Guardar Factura como Excel", "", "Excel Files (*.xlsx)")
+        if fn:
+            save_path = fn if fn.endswith(".xlsx") else fn + ".xlsx"
+            generate_invoice_excel(data, items, save_path, company.get('name', ''))
+
+    def _generate_invoice_pdf(self):
+        company = self.get_current_company()
+        if not company:
+            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida"); return
+        data = {
+            "company_id": company['id'],
+            "invoice_date": self.invoice_date.date().toString("yyyy-MM-dd"),
+            "invoice_number": self.ncf_number_edit.text(),
+            "client_name": self.client_name.text(),
+            "client_rnc": self.client_rnc.text(),
+            "currency": self.currency_combo.currentText(),
+        }
+        items = []
+        for r in range(self.invoice_items_table.rowCount()):
+            desc = self.invoice_items_table.item(r, 2)
+            qty = self.invoice_items_table.item(r, 4)
+            price = self.invoice_items_table.item(r, 5)
+            try:
+                qty_val = float(qty.text().replace(",", "")) if qty and qty.text().strip() else 0.0
+                price_val = float(price.text().replace(",", "")) if price and price.text().strip() else 0.0
+            except Exception:
+                qty_val = 0.0; price_val = 0.0
+            items.append({"description": desc.text() if desc else "", "quantity": qty_val, "unit_price": price_val})
+        fn, _ = QFileDialog.getSaveFileName(self, "Guardar Factura como PDF", "", "PDF Files (*.pdf)")
+        if fn:
+            save_path = fn if fn.endswith(".pdf") else fn + ".pdf"
+            generate_invoice_pdf(data, items, save_path, company.get('name', ''))
+
+    def _on_currency_change(self):
+        moneda = self.currency_combo.currentText()
+        if moneda != "RD$":
+            self.exchange_rate_edit.setVisible(True)
+            tasa, ok = QInputDialog.getDouble(self, "Tasa de cambio", f"Ingrese la tasa para {moneda}→RD$:", value=1.00, min=0.01, decimals=4)
+            self.exchange_rate_edit.setText(str(tasa) if ok else "1.00")
+        else:
+            self.exchange_rate_edit.setText("1.00"); self.exchange_rate_edit.setVisible(False)
+
+    def _clear_invoice_form(self):
+        self.invoice_date.setDate(QDate.currentDate())
+        self.invoice_due_date.setDate(QDate.currentDate())
+        self.ncf_number_edit.clear()
+        self.client_rnc.clear(); self.client_name.clear()
+        self.currency_combo.setCurrentText(DEFAULT_CURRENCY)
+        self.exchange_rate_edit.setText("1.00"); self.exchange_rate_edit.setVisible(False)
+        self.invoice_items_table.setRowCount(0)
+        self.subtotal_label.setText("Subtotal: RD$ 0.00")
+        self.itbis_label.setText("ITBIS: RD$ 0.00")
+        self.total_label.setText("Total: RD$ 0.00")
+
+    def _save_invoice(self):
+        company = self.get_current_company()
+        if not company:
+            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida"); return
+        cliente_nombre = self.client_name.text().strip()
+        cliente_rnc = self.client_rnc.text().strip()
+        if not cliente_nombre or not cliente_rnc:
+            QMessageBox.warning(self, "Cliente", "Complete nombre y RNC del cliente."); return
+        moneda = self.currency_combo.currentText()
+        try:
+            tasa = float(self.exchange_rate_edit.text().replace(",", "")) if self.exchange_rate_edit.text().strip() else 1.0
+            if tasa <= 0: tasa = 1.0
+        except Exception:
+            tasa = 1.0
+
+        subtotal = 0.0; items = []
+        for r in range(self.invoice_items_table.rowCount()):
+            desc = self.invoice_items_table.item(r, 2)
+            qty = self.invoice_items_table.item(r, 4)
+            price = self.invoice_items_table.item(r, 5)
+            sub = self.invoice_items_table.item(r, 6)
+            try:
+                qv = float(qty.text().replace(",", "")) if qty and qty.text().strip() else 0.0
+                pv = float(price.text().replace(",", "")) if price and price.text().strip() else 0.0
+                sv = float(sub.text().replace(",", "")) if sub and sub.text().strip() else qv * pv
+            except Exception:
+                qv = 0.0; pv = 0.0; sv = 0.0
+            subtotal += sv
+            items.append({"description": desc.text() if desc else "", "quantity": qv, "unit_price": pv})
+
+        itbis = subtotal * ITBIS_RATE if self.apply_itbis_checkbox.isChecked() else 0.0
+        total = subtotal + itbis
+        total_rd = total * tasa
+
+        payload = {
+            "company_id": company['id'],
+            "invoice_type": "emitida",
+            "invoice_date": self.invoice_date.date().toString("yyyy-MM-dd"),
+            "invoice_number": self.ncf_number_edit.text(),
+            "third_party_name": cliente_nombre,
+            "rnc": cliente_rnc,
+            "currency": moneda,
+            "itbis": itbis,
+            "total_amount": total,
+            "exchange_rate": tasa,
+            "total_amount_rd": total_rd,
+            "excel_path": "",
+            "pdf_path": "",
+        }
+        invoice_id = self.logic.add_invoice(payload, items)
+        QMessageBox.information(self, "Factura", f"Factura creada (ID: {invoice_id})")
+        self._clear_invoice_form()
+        self.invoice_saved.emit(invoice_id)
+
+# Snippet: añade los imports siguientes al inicio de tabs/invoice_tab.py:
+#
+
+#
+# Luego pega estos métodos dentro de la clase InvoiceTab.
+
+# === IMPORTS: Reemplaza o añade en la cabecera de tabs/invoice_tab.py ===
+# (Sustituye cualquier import antiguo tipo `from utils.invoice_templates import ...`)
+
+
+# === HANDLERS: Pega estas funciones dentro de la clase InvoiceTab, reemplazando las versiones previas ===
+
+    def _generate_invoice_template(self):
+        try:
+            fn, _ = QFileDialog.getSaveFileName(self, "Guardar plantilla de Factura", "plantilla_factura.xlsx", "Excel Files (*.xlsx)")
+            if not fn:
+                return
+            save_path = fn if fn.lower().endswith(".xlsx") else fn + ".xlsx"
+            # import local para evitar problemas de importación en el inicio del módulo
+            from utils.invoice_templates import generate_invoice_template
+            generate_invoice_template(save_path)
+            QMessageBox.information(self, "Plantilla", f"Plantilla de factura creada en:\n{save_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo generar la plantilla:\n{e}")
+
+    def _generate_invoice_excel(self):
+        """Handler: Exportar la factura actual a Excel (guardar/vista previa)."""
+        company = self.get_current_company()
+        if not company:
+            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida")
+            return
+
+        invoice_data = {
+            "company_id": company.get('id'),
+            "company_name": company.get('name', ''),
+            "ncf_type": getattr(self, "ncf_type_combo", None) and self.ncf_type_combo.currentText(),
+            "ncf_number": getattr(self, "ncf_number_edit", None) and self.ncf_number_edit.text(),
+            "invoice_date": getattr(self, "invoice_date", None) and self.invoice_date.date().toString("yyyy-MM-dd"),
+            "due_date": getattr(self, "invoice_due_date", None) and self.invoice_due_date.date().toString("yyyy-MM-dd"),
+            "client_name": getattr(self, "client_name", None) and self.client_name.text(),
+            "client_rnc": getattr(self, "client_rnc", None) and self.client_rnc.text(),
+            "currency": getattr(self, "currency_combo", None) and self.currency_combo.currentText(),
+            "apply_itbis": getattr(self, "apply_itbis_checkbox", None) and self.apply_itbis_checkbox.isChecked(),
+            "itbis_rate": ITBIS_RATE,
+            "notes": getattr(self, "invoice_notes", None) and self.invoice_notes.toPlainText() if getattr(self, "invoice_notes", None) else ""
+        }
+
+        # Recolectar ítems desde la tabla invoice_items_table (ajusta columnas si tus columnas difieren)
+        items: List[Dict] = []
+        for r in range(self.invoice_items_table.rowCount()):
+            code = self.invoice_items_table.item(r, 1)
+            desc = self.invoice_items_table.item(r, 2)
+            unit = self.invoice_items_table.item(r, 3)
+            qty = self.invoice_items_table.item(r, 4)
+            price = self.invoice_items_table.item(r, 5)
+            try:
+                qty_val = float(qty.text().replace(",", "")) if qty and qty.text().strip() else 0.0
+                price_val = float(price.text().replace(",", "")) if price and price.text().strip() else 0.0
+            except Exception:
+                qty_val = 0.0
+                price_val = 0.0
+            items.append({
+                "code": code.text() if code else "",
+                "description": desc.text() if desc else "",
+                "unit": unit.text() if unit else "",
+                "quantity": qty_val,
+                "unit_price": price_val,
+            })
+
+        if not items:
+            QMessageBox.warning(self, "Ítems", "Agrega al menos un ítem a la factura antes de exportar.")
+            return
+
+        fn, _ = QFileDialog.getSaveFileName(self, "Guardar Factura como Excel", "", "Excel Files (*.xlsx)")
+        if not fn:
+            return
+        save_path = fn if fn.lower().endswith(".xlsx") else fn + ".xlsx"
+        # Aseguramos company_id en los datos (usado por el template loader)
+        invoice_data["company_id"] = company.get('id')
+        try:
+            export_invoice_excel_with_template(invoice_data, items, save_path, company_name=company.get('name', ''))
+            QMessageBox.information(self, "Excel", f"Factura guardada como Excel en:\n{save_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo exportar la factura a Excel:\n{e}")
+
+    def _generate_invoice_pdf(self):
+        """Handler: Exportar la factura actual a PDF."""
+        company = self.get_current_company()
+        if not company:
+            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida")
+            return
+
+        invoice_data = {
+            "company_id": company.get('id'),
+            "company_name": company.get('name', ''),
+            "ncf_type": getattr(self, "ncf_type_combo", None) and self.ncf_type_combo.currentText(),
+            "ncf_number": getattr(self, "ncf_number_edit", None) and self.ncf_number_edit.text(),
+            "invoice_date": getattr(self, "invoice_date", None) and self.invoice_date.date().toString("yyyy-MM-dd"),
+            "due_date": getattr(self, "invoice_due_date", None) and self.invoice_due_date.date().toString("yyyy-MM-dd"),
+            "client_name": getattr(self, "client_name", None) and self.client_name.text(),
+            "client_rnc": getattr(self, "client_rnc", None) and self.client_rnc.text(),
+            "currency": getattr(self, "currency_combo", None) and self.currency_combo.currentText(),
+            "apply_itbis": getattr(self, "apply_itbis_checkbox", None) and self.apply_itbis_checkbox.isChecked(),
+            "itbis_rate": ITBIS_RATE,
+            "notes": getattr(self, "invoice_notes", None) and self.invoice_notes.toPlainText() if getattr(self, "invoice_notes", None) else ""
+        }
+
+        items: List[Dict] = []
+        for r in range(self.invoice_items_table.rowCount()):
+            code = self.invoice_items_table.item(r, 1)
+            desc = self.invoice_items_table.item(r, 2)
+            unit = self.invoice_items_table.item(r, 3)
+            qty = self.invoice_items_table.item(r, 4)
+            price = self.invoice_items_table.item(r, 5)
+            try:
+                qty_val = float(qty.text().replace(",", "")) if qty and qty.text().strip() else 0.0
+                price_val = float(price.text().replace(",", "")) if price and price.text().strip() else 0.0
+            except Exception:
+                qty_val = 0.0
+                price_val = 0.0
+            items.append({
+                "code": code.text() if code else "",
+                "description": desc.text() if desc else "",
+                "unit": unit.text() if unit else "",
+                "quantity": qty_val,
+                "unit_price": price_val,
+            })
+
+        if not items:
+            QMessageBox.warning(self, "Ítems", "Agrega al menos un ítem a la factura antes de exportar.")
+            return
+
+        fn, _ = QFileDialog.getSaveFileName(self, "Guardar Factura como PDF", "", "PDF Files (*.pdf)")
+        if not fn:
+            return
+        save_path = fn if fn.lower().endswith(".pdf") else fn + ".pdf"
+        invoice_data["company_id"] = company.get('id')
+        try:
+            export_invoice_pdf_with_template(invoice_data, items, save_path, company_name=company.get('name', ''))
+            QMessageBox.information(self, "PDF", f"Factura guardada como PDF en:\n{save_path}")
+        except RuntimeError as re:
+            QMessageBox.critical(self, "Dependencia", f"No se pudo generar PDF. Instala reportlab:\n{re}")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo exportar la factura a PDF:\n{e}")
+
+    def _on_edit_template(self):
+        """Abrir el editor de plantillas para la empresa seleccionada (InvoiceTab)."""
+        try:
+            company = self.get_current_company()
+        except Exception:
+            company = None
+
+        if not company:
+            QMessageBox.warning(self, "Plantilla", "Seleccione primero una empresa válida.")
+            return
+
+        company_id = company.get("id") or company.get("company_id") or company.get("pk")
+        if not company_id:
+            QMessageBox.warning(self, "Plantilla", "La empresa seleccionada no tiene identificador.")
+            return
+
+        try:
+            dlg = TemplateEditorDialog(company_id=company_id, parent=self)
+            if dlg.exec():
+                QMessageBox.information(self, "Plantilla", "Plantilla guardada correctamente.")
+        except Exception as e:
+            QMessageBox.critical(self, "Plantilla", f"No se pudo abrir el editor de plantillas:\n{e}")

@@ -1,0 +1,707 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Cotización - Diseño Minimalista</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+
+  <style>
+    @page { size: Letter; margin: 15mm; }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    :root{
+      --primary: #0087C3;
+      --secondary: #F5F5F5;
+      --muted: #666666; 
+      --text: #333333;
+    }
+    
+    body {
+      position: relative;
+      width: 100%;
+      max-width: 21.59cm; /* 8.5in */
+      margin: 0 auto; 
+      color: var(--text);
+      background: #FFFFFF; 
+      font-family: 'Inter', Arial, sans-serif; 
+      font-size: 13px;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+
+    .print-area {
+      width: 100%;
+      padding: 15mm;
+      min-height: 27.9cm;
+      display: flex;
+      flex-direction: column;
+
+      /* FIX: evita el hueco grande entre header y el resto */
+      justify-content: flex-start;
+
+      /* opcional: espaciado consistente entre secciones */
+      gap: 12px;
+
+      position: relative;
+    }
+
+    header {
+      padding: 10px 0;
+      margin-bottom: 20px;
+      border-bottom: 1px solid var(--muted);
+    }
+
+    #logo {
+      float: left;
+      margin-top: 8px;
+    }
+
+    /* Logo como en las facturas: sin recuadro de color, imagen directa si existe */
+    #company-logo {
+      min-height: 70px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    #company-logo img {
+      height: 70px;
+      width: auto;
+      object-fit: contain;
+      display: block;
+    }
+    #company-logo .initials-fallback {
+      font-weight: 800;
+      color: var(--primary);
+      font-size: 1.2em;
+    }
+
+    #company {
+      float: right;
+      text-align: right;
+    }
+
+    #company .name {
+      font-weight: 700;
+      font-size: 1.2em;
+      margin: 0 0 5px 0;
+      color: var(--primary);
+    }
+    
+    #company-meta-container div {
+      font-size: 0.95em;
+      color: #777;
+      margin-bottom: 2px;
+      line-height: 1.4;
+    }
+
+    #details {
+      margin-bottom: 35px;
+      overflow: hidden; /* clearfix */
+    }
+
+    #client {
+      padding-left: 8px;
+      border-left: 4px solid var(--primary);
+      float: left;
+      max-width: 50%;
+    }
+
+    #client .to {
+      color: #999;
+      font-size: 0.9em;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+      letter-spacing: 0.5px;
+    }
+    
+    #client .name {
+      font-size: 1.2em;
+      font-weight: 600;
+      margin: 0 0 8px 0;
+      color: var(--text);
+    }
+    
+    #client .rnc-display {
+      font-size: 0.95em;
+      color: #666;
+      margin-bottom: 3px;
+    }
+
+    /* Panel derecho (alineado a la derecha) */
+    #quotation {
+      float: right;
+      text-align: right;
+      width: 49%;
+    }
+
+    #quotation h1 {
+      color: var(--primary);
+      font-size: 2em;
+      line-height: 1em;
+      font-weight: 600;
+      margin: 0 0 10px 0;
+      text-transform: uppercase;
+    }
+
+    /* Recuadro con datos de la cotización (alineado a la derecha) */
+    #quotation .meta-box, #quotation-meta-box {
+      background: var(--secondary);
+      padding: 12px 15px;
+      border-radius: 4px;
+      margin-top: 10px;
+      display: inline-block;
+      min-width: 280px;
+      text-align: left; /* filas con etiqueta/valor */
+      line-height: 1.6;
+      border: 1px solid #ddd;
+    }
+
+    .meta-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      font-size: 0.95em;
+    }
+
+    .meta-row span:first-child {
+      color: #777;
+      margin-right: 15px;
+      min-width: 140px;
+    }
+
+    .detail-value {
+      color: #333;
+      font-weight: 600;
+      text-align: right;
+    }
+
+    .number-large {
+      color: var(--primary);
+      font-weight: 700;
+      font-size: 1.1em;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      border-spacing: 0;
+      margin-bottom: 20px;
+    }
+
+    table thead th {
+      background: var(--primary);
+      color: #FFFFFF;
+      padding: 10px 15px;
+      font-weight: 600;
+      text-align: center;
+      font-size: 0.85em;
+      text-transform: uppercase;
+    }
+
+    table tbody td {
+      padding: 12px 15px;
+      background: #FFFFFF;
+      border-bottom: 1px solid #EEEEEE;
+      text-align: right;
+      vertical-align: top;
+      font-size: 0.95em;
+    }
+
+    /* Ajuste de anchos: DESCRIPCIÓN más ancho, CANTIDAD más angosta */
+    table .no { width: 5%; color: var(--primary); background: var(--secondary); font-weight: 600; text-align: center; }
+    table .desc { width: 50%; text-align: left; }
+    table .unit { width: 10%; text-align: center; text-transform: uppercase; }
+    table .unit-price { width: 14%; }
+    table .qty { width: 8%; text-align: center; }
+    table .total { width: 13%; font-weight: 600; }
+
+    table .desc .code {
+      color: var(--primary);
+      font-weight: 600;
+      font-size: 1em;
+    }
+
+    table .desc .sub-text {
+      color: #666;
+      font-size: 0.9em;
+      line-height: 1.4;
+      display: block;
+    }
+
+    table tfoot td {
+      text-align: right;
+      padding: 10px 15px;
+      background: #FFFFFF;
+      border-bottom: none;
+      font-size: 1em;
+      white-space: nowrap; 
+      border-top: 1px solid #AAAAAA;
+    }
+
+    table tfoot tr:last-child td {
+      color: var(--primary);
+      font-size: 1.3em;
+      font-weight: 700;
+      border-top: 2px solid var(--primary);
+    }
+
+    table tfoot tr td:first-child { border: none; }
+    table tfoot tr td:nth-child(2) { text-align: right; font-weight: 600; color: var(--text); }
+    table tfoot tr:last-child td:nth-child(2) { color: var(--primary); }
+    
+    .signatures {
+      margin-top: auto; 
+      padding-top: 50px;
+    }
+
+    .signature-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 50px;
+      margin-bottom: 30px;
+    }
+
+    .signature-block {
+      flex: 1;
+      text-align: center;
+    }
+
+    .signature-line {
+      display: block;
+      height: 1px;
+      background: #333;
+      margin: 0 auto 8px auto;
+      width: 100%;
+    }
+
+    .signature-name {
+      font-weight: 600;
+      color: #333;
+      margin-bottom: 3px;
+    }
+
+    .signature-label {
+      font-size: 0.85em;
+      color: #777;
+    }
+    
+    footer {
+      color: #999;
+      width: 100%;
+      padding: 10px 0;
+      text-align: center;
+      font-size: 0.85em;
+    }
+    
+    @media print {
+      body { padding: 0; }
+      .print-area {
+        min-height: 11in;
+        padding: 12mm;
+        box-shadow: none;
+        border: none;
+      }
+      header { border-bottom: 2px solid #333; }
+      footer { position: fixed; bottom: 0; left: 0; right: 0; }
+    }
+    
+    @media (max-width: 768px) {
+      #client, #quotation {
+        float: none;
+        width: 100%;
+        margin-bottom: 20px;
+      }
+      #company { text-align: left; }
+      #quotation { text-align: left; }
+    }
+  </style>
+
+  <script>
+    /* --- AYUDA / PARSEO --- */
+    function readInjectedJSON() {
+      try {
+        var node = document.getElementById('quotation-data');
+        if (node && node.textContent && node.textContent.trim() && node.textContent.trim() !== '/* INJECT_JSON_PLACEHOLDER */') {
+          var payload = JSON.parse(node.textContent);
+          window.COMPANY   = payload.COMPANY   || {};
+          window.TEMPLATE  = payload.TEMPLATE  || {};
+          // Compat: aceptar payload.QUOTATION o payload.INVOICE
+          window.QUOTATION = payload.QUOTATION || payload.INVOICE || {};
+          return;
+        }
+      } catch (e) {
+        console.warn('Error parsing injected JSON', e);
+      }
+      window.COMPANY = window.COMPANY || {};
+      window.TEMPLATE = window.TEMPLATE || {};
+      window.QUOTATION = window.QUOTATION || {};
+    }
+
+    function formatCurrency(n, decimals = 2) {
+      n = Number(n) || 0;
+      return new Intl.NumberFormat('es-DO', { 
+        minimumFractionDigits: decimals, 
+        maximumFractionDigits: decimals 
+      }).format(n);
+    }
+
+    function formatDate(dateString) {
+      if (!dateString) return 'N/A';
+      try {
+        const date = new Date(String(dateString).replace(/-/g, "/"));
+        return date.toLocaleDateString('es-DO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      } catch (e) {
+        return dateString;
+      }
+    }
+
+    function escapeHtml(text) {
+      if (text === null || text === undefined) return "";
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+    
+    function setColorVariables() {
+      try {
+        var p = (window.TEMPLATE && window.TEMPLATE.primary_color) || (window.COMPANY && window.COMPANY.primary_color) || '#0087C3';
+        document.documentElement.style.setProperty('--primary', p);
+        var sheet = document.styleSheets && document.styleSheets[0];
+        if (sheet && sheet.insertRule) {
+          sheet.insertRule('table thead th { background: ' + p + ' !important; }', sheet.cssRules.length);
+        }
+      } catch (e) {
+        console.warn('setColorVariables error', e);
+      }
+    }
+
+    /* --- LÓGICA DE NEGOCIO (N° Cotización) --- */
+    function computeQuotationNumber(q, comp) {
+      // Si viene display_number/number, usarlo
+      if (q && (q.display_number || q.number)) {
+        return q.display_number || q.number;
+      }
+      // Prefijo de 3 primeras letras de la empresa (ignorando espacios/símbolos)
+      var name = (comp && comp.name) ? String(comp.name) : '';
+      var letters = name.normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^A-Za-z]/g,'');
+      var prefix = (letters.substring(0,3) || 'EMP').toUpperCase(); // p.ej. BAR
+      // ID de la cotización (q.id); si no existe, usar 0
+      var id = (q && (q.id !== undefined && q.id !== null)) ? Number(q.id) : 0;
+      var idStr = String(Math.max(0, id)).padStart(6, '0'); // 6 dígitos
+      return 'COT-' + prefix + '-' + idStr;
+    }
+
+    /* --- RENDER --- */
+
+    function renderHeader() {
+      try {
+        var comp = window.COMPANY || {};
+        var tpl = window.TEMPLATE || {};
+        var name = comp.name || 'MI EMPRESA';
+        var initials = name.split(/\s+/).filter(Boolean).map(w => w[0]).join('').substring(0, 2).toUpperCase();
+        var phone = comp.phone || comp.telefono || '';
+        var email = comp.email || comp.correo || '';
+        
+        // Logo como imagen directa (sin recuadro)
+        var logoContainer = document.getElementById('company-logo');
+        if (logoContainer) {
+          var logoSrc = comp.logo_path || tpl.logo_path || '';
+          if (tpl.show_logo !== false && logoSrc && logoSrc.toLowerCase().trim() !== "file:///") {
+            logoContainer.innerHTML = '<img src="' + logoSrc + '" alt="Logo">';
+          } else {
+            logoContainer.innerHTML = '<span class="initials-fallback">' + (initials || 'MI') + '</span>';
+          }
+        }
+        
+        // Nombre empresa
+        var nameNode = document.getElementById('company-name');
+        if (nameNode) nameNode.textContent = String(name).toUpperCase();
+
+        // Meta: RNC, Dirección, Teléfono, Email
+        var metaContainer = document.getElementById('company-meta-container');
+        if (metaContainer) {
+          metaContainer.innerHTML = '';
+          var rnc = comp.rnc || comp.rnc_number || 'N/A';
+          var address = comp.address 
+            || [comp.address_line1, comp.address_line2].filter(line => line && line.trim() !== '').join(', ');
+
+          var phoneSafe = phone || 'N/A';
+          var emailSafe = email || 'N/A';
+
+          metaContainer.innerHTML += '<div>RNC: ' + escapeHtml(rnc) + '</div>';
+          metaContainer.innerHTML += '<div>' + escapeHtml(address || 'Dirección no especificada') + '</div>';
+          metaContainer.innerHTML += '<div>Teléfono: ' + escapeHtml(phoneSafe) + '</div>';
+
+          var emailHtml = 'Email: ' + escapeHtml(emailSafe);
+          if (email && email.trim()) {
+            emailHtml = 'Email: <a href="mailto:' + escapeHtml(email) + '" style="color:' + ((window.TEMPLATE && window.TEMPLATE.primary_color) || '#0087C3') + ';">' + escapeHtml(email) + '</a>';
+          }
+          metaContainer.innerHTML += '<div>' + emailHtml + '</div>';
+        }
+
+        // Clearfix header
+        var clear = document.createElement('div');
+        clear.style.clear = 'both';
+        var header = document.querySelector('header');
+        if (header) header.appendChild(clear);
+
+      } catch (e) { 
+        console.warn('renderHeader error', e); 
+      }
+    }
+
+    function renderMeta() {
+      try {
+        var q = window.QUOTATION || {};
+        var comp = window.COMPANY || {};
+
+        // Título "COTIZACIÓN"
+        var typeNode = document.getElementById('quotation-type');
+        var typeText = (q.type || q.quotation_type || 'COTIZACIÓN');
+        if (typeNode) typeNode.textContent = String(typeText).toUpperCase();
+
+        // N° de cotización (ID + prefijo 3 letras empresa si no viene)
+        var displayNumber = computeQuotationNumber(q, comp);
+
+        // Recuadro meta (derecha, sin NCF)
+        var metaBox = document.getElementById('quotation-meta-box');
+        if (metaBox) {
+          metaBox.innerHTML = [
+            '<div class="meta-row"><span>N° Cotización:</span><span class="detail-value number-large">' + escapeHtml(displayNumber) + '</span></div>',
+            '<div class="meta-row"><span>Fecha Emisión:</span><span class="detail-value">' + formatDate(q.date || q.quotation_date || q.created_at) + '</span></div>',
+            '<div class="meta-row"><span>Vencimiento:</span><span class="detail-value">' + (q.due_date ? formatDate(q.due_date) : 'N/A') + '</span></div>'
+          ].join('');
+        }
+      } catch (e) { 
+        console.warn('renderMeta error', e); 
+      }
+    }
+
+    function renderClient() {
+      try {
+        var q = window.QUOTATION || {};
+        var clientName = q.client_name || q.third_party_name || 'Cliente sin nombre';
+        var clientRnc = q.client_rnc || q.rnc || 'N/A';
+        
+        var cn = document.getElementById('client-name');
+        if (cn) cn.textContent = escapeHtml(clientName);
+        
+        var cr = document.getElementById('client-rnc');
+        if (cr) cr.textContent = 'RNC: ' + escapeHtml(clientRnc);
+
+        // Clearfix details
+        var detailsEl = document.getElementById('details');
+        if (detailsEl) {
+          var clear = document.createElement('div');
+          clear.style.clear = 'both';
+          detailsEl.appendChild(clear);
+        }
+      } catch (e) { 
+        console.warn('renderClient error', e); 
+      }
+    }
+
+<!-- SOLO MODIFICA ESTA FUNCIÓN dentro del <script> -->
+
+    function renderItemsAndTotals() {
+      try {
+        var q = window.QUOTATION || {};
+        var items = q.items || [];
+        var tbody = document.getElementById('items-table-body');
+        var tfoot = document.getElementById('items-table-footer');
+        if (!tbody || !tfoot) return;
+        
+        var html = '';
+        var subtotal = 0;
+        var currency = q.currency || 'RD$';
+        var itbis_rate = Number((window.TEMPLATE && window.TEMPLATE.itbis_rate) || 0.18);
+
+        for (var i = 0; i < items.length; i++) {
+          var it = items[i] || {};
+          var qty = Number(it.quantity) || 0;
+          var up = Number(it.unit_price) || 0;
+          var line = qty * up;
+          subtotal += line;
+          
+          var formattedQty = formatCurrency(qty, 2);
+
+          html += '<tr>';
+          html += '<td class="no">' + String(i + 1).padStart(2, '0') + '</td>';
+          html += '<td class="desc"><div class="code">' + escapeHtml(it.code || '') + '</div><div class="sub-text">' + escapeHtml(it.description || '') + '</div></td>';
+          html += '<td class="unit">' + escapeHtml(it.unit || 'UNID') + '</td>';
+          html += '<td class="unit-price">' + formatCurrency(up) + '</td>';
+          html += '<td class="qty">' + formattedQty + '</td>';
+          html += '<td class="total">' + formatCurrency(line) + '</td>';
+          html += '</tr>';
+        }
+        
+        // thead con moneda y anchos ya definidos por CSS
+        var theadRow = document.querySelector('table thead tr');
+        if (theadRow) {
+          theadRow.innerHTML = [
+            '<th class="no">#</th>',
+            '<th class="desc">Descripción</th>',
+            '<th class="unit">Unidad</th>',
+            '<th class="unit-price">P. Unitario (' + escapeHtml(currency) + ')</th>',
+            '<th class="qty">Cantidad</th>',
+            '<th class="total">Importe (' + escapeHtml(currency) + ')</th>'
+          ].join('');
+        }
+        
+        if (!items.length) {
+          html += '<tr><td colspan="6" style="text-align:center; color:var(--muted); padding: 30px;">No hay ítems en esta cotización.</td></tr>';
+        }
+        
+        tbody.innerHTML = html;
+        
+        // --- TOTALES CON VERIFICACIÓN DE apply_itbis ---
+        // ✅ CAMBIO CLAVE: Respetar la bandera apply_itbis del payload
+        var applyItbis = (q.apply_itbis !== undefined) ? q.apply_itbis : false; // Por defecto false en cotizaciones
+        var itbisAmount = applyItbis ? (subtotal * itbis_rate) : 0.0;
+        var total = subtotal + itbisAmount;
+        
+        tfoot.innerHTML = [
+          '<tr><td colspan="4"></td><td>SUBTOTAL (' + escapeHtml(currency) + '):</td><td>' + formatCurrency(subtotal) + '</td></tr>',
+          '<tr><td colspan="4"></td><td>ITBIS (' + (itbis_rate * 100).toFixed(0) + '%):</td><td>' + formatCurrency(itbisAmount) + '</td></tr>',
+          '<tr><td colspan="4"></td><td>TOTAL A PAGAR (' + escapeHtml(currency) + '):</td><td>' + formatCurrency(total) + '</td></tr>'
+        ].join('');
+      } catch (e) { 
+        console.error('renderItemsAndTotals error', e); 
+      }
+    }
+    function renderFooter() {
+      try {
+        var sig = (window.COMPANY && (window.COMPANY.authorized_name || window.COMPANY.signature_name)) 
+                  || (window.TEMPLATE && window.TEMPLATE.signature_name) 
+                  || '';
+        var sigNode = document.getElementById('signature-name');
+        if (sigNode) sigNode.textContent = (sig && String(sig).trim()) ? String(sig).toUpperCase() : 'NOMBRE AUTORIZADO';
+
+
+
+        // Clearfix firmas
+        var sigWrap = document.querySelector('.signatures');
+        if (sigWrap) {
+          var clear = document.createElement('div');
+          clear.style.clear = 'both';
+          sigWrap.appendChild(clear);
+        }
+      } catch (e) { 
+        console.warn('renderFooter error', e); 
+      }
+    }
+
+    function renderAll() {
+      setColorVariables();
+      renderHeader();
+      renderMeta();
+      renderClient();
+      renderItemsAndTotals();
+      renderFooter();
+    }
+
+    window.onload = function() {
+      try { readInjectedJSON(); } catch(e) { console.warn(e); }
+      setTimeout(renderAll, 50);
+    };
+  </script>
+</head>
+<body>
+  <!-- PyQt inyecta JSON aquí -->
+  <script id="quotation-data" type="application/json">/* INJECT_JSON_PLACEHOLDER */</script>
+
+  <div class="print-area" id="invoice-document">
+    <header class="clearfix">
+      <div id="logo">
+        <div id="company-logo"></div>
+      </div>
+      <div id="company">
+        <h2 id="company-name" class="name">NOMBRE EMPRESA</h2>
+        <div id="company-meta-container">
+          <div>RNC: N/A</div>
+          <div>Dirección no especificada</div>
+          <div>Teléfono: N/A</div>
+          <div>Email: N/A</div>
+        </div>
+      </div>
+    </header>
+
+    <main>
+      <div id="details" class="clearfix">
+        <div id="client">
+          <div class="to">COTIZADO A:</div>
+          <h2 id="client-name" class="name">Nombre del Cliente</h2>
+          <div id="client-rnc" class="rnc-display">RNC: N/A</div>
+        </div>
+        <div id="quotation">
+          <h1 id="quotation-type">COTIZACIÓN</h1>
+          <div id="quotation-meta-box" class="meta-box">
+            <!-- Se rellena con JS (sin NCF) -->
+            <div class="meta-row">
+              <span>N° Cotización:</span>
+              <span class="detail-value number-large">N/A</span>
+            </div>
+            <div class="meta-row">
+              <span>Fecha Emisión:</span>
+              <span class="detail-value">--/--/----</span>
+            </div>
+            <div class="meta-row">
+              <span>Vencimiento:</span>
+              <span class="detail-value">N/A</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="items-header" style="font-size: 1.1em; font-weight: 600; margin: 20px 0 10px 0; color: var(--text);">DETALLE DE SERVICIOS / PRODUCTOS</div>
+      
+      <table border="0" cellspacing="0" cellpadding="0">
+        <thead>
+          <tr>
+            <th class="no">#</th>
+            <th class="desc">Descripción</th>
+            <th class="unit">Unidad</th>
+            <th class="unit-price">P. Unitario (RD$)</th>
+            <th class="qty">Cantidad</th>
+            <th class="total">Importe (RD$)</th>
+          </tr>
+        </thead>
+        <tbody id="items-table-body"></tbody>
+        <tfoot id="items-table-footer"></tfoot>
+      </table>
+      
+      <div id="notes" style="margin-top: 40px; font-size: 0.9em; padding: 0 15px;">
+        <strong>Notas:</strong> <span id="invoice-notes">Pagos a realizar mediante transferencia bancaria.</span>
+      </div>
+
+      <div class="signatures">
+        <div class="signature-row">
+          <div class="signature-block">
+            <div class="signature-line"></div>
+            <div id="signature-name" class="signature-name">NOMBRE AUTORIZADO</div>
+            <div class="signature-label">Firma Autorizada de la Empresa</div>
+          </div>
+
+          <div class="signature-block">
+            <div class="signature-line"></div>
+            <div class="signature-name">&nbsp;</div>
+            <div class="signature-label">Aceptado y Recibido Por el Cliente</div>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <footer>
+      Esta cotización fue generada electrónicamente.
+    </footer>
+  </div>
+</body>
+</html>

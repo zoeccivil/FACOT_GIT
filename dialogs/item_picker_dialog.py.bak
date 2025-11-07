@@ -1,0 +1,365 @@
+from __future__ import annotations
+import sqlite3
+from typing import List, Dict, Tuple, Optional
+
+from PyQt6.QtCore import Qt, QSettings
+from PyQt6.QtGui import QDoubleValidator
+from PyQt6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QTableWidget,
+    QTableWidgetItem, QWidget, QHeaderView, QMessageBox, QGroupBox, QFormLayout, QSplitter,
+    QComboBox, QStyledItemDelegate, QSizePolicy
+)
+
+import facot_config
+from items_management_window import ItemsManagementWindow
+
+def get_db_path() -> str:
+    return facot_config.get_db_path() or ""
+
+class NumericItemDelegate(QStyledItemDelegate):
+    """Delegate numérico para edición de celdas (float)."""
+    def __init__(self, decimals: int = 4, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.decimals = decimals
+
+    def createEditor(self, parent, option, index):
+        editor = QLineEdit(parent)
+        editor.setValidator(QDoubleValidator(0.0, 1e12, self.decimals, parent))
+        return editor
+
+    def setEditorData(self, editor, index):
+        text = index.data() or ""
+        editor.setText(text)
+
+    def setModelData(self, editor, model, index):
+        try:
+            val = float((editor.text() or "0").replace(",", ""))
+        except Exception:
+            val = 0.0
+        model.setData(index, f"{val:.2f}")
+
+class ItemPickerDialog(QDialog):
+    """
+    Diálogo para buscar ítems, agregarlos con cantidad y precio a un 'carrito'
+    y devolverlos al tab de Factura/Cotización.
+    - Búsqueda por texto + filtro por categoría
+    - Edición en línea de Cantidad/Precio en el carrito
+    - Re-cálculo automático de subtotales y total del carrito
+    - Abrir Gestión de Ítems y refrescar al volver
+    - Expandible y con botón de maximizar
+    """
+    def __init__(self, parent=None, title: str = "Agregar ítems"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+
+        # Habilitar maximizar/minimizar y expansión
+        self.setWindowFlag(Qt.WindowType.Window, True)
+        self.setWindowFlags(self.windowFlags()
+                            | Qt.WindowType.WindowMinMaxButtonsHint
+                            | Qt.WindowType.WindowMaximizeButtonHint)
+        self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        self.setSizeGripEnabled(True)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.resize(980, 600)
+
+        self._updating_cart = False
+        self.categories: List[Tuple[int, str, str]] = []
+
+        self._build_ui()
+        self._load_categories()
+        self._search_items()
+        self._restore_geometry()
+
+    def _build_ui(self):
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(8)
+
+        self.setStyleSheet("""
+        QGroupBox {
+            border: 1px solid #555; border-radius: 6px; margin-top: 8px; 
+            padding: 8px; 
+        }
+        QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 4px; }
+        """)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
+        root.addWidget(splitter, stretch=1)
+
+        # Panel izquierdo
+        left = QWidget(); left_lay = QVBoxLayout(left)
+        left.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        filters_box = QGroupBox("Buscar ítems")
+        filters_lay = QHBoxLayout(filters_box)
+        self.category_filter = QComboBox(); self.category_filter.currentIndexChanged.connect(self._search_items)
+        self.category_filter.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        self.search_edit = QLineEdit(); self.search_edit.setPlaceholderText("Escribe código, nombre o categoría…")
+        self.search_edit.textChanged.connect(self._search_items)
+        btn_refresh = QPushButton("Refrescar"); btn_refresh.clicked.connect(self._search_items)
+
+        filters_lay.addWidget(QLabel("Categoría:"))
+        filters_lay.addWidget(self.category_filter, stretch=2)
+        filters_lay.addWidget(QLabel("Texto:"))
+        filters_lay.addWidget(self.search_edit, stretch=3)
+        filters_lay.addWidget(btn_refresh)
+        left_lay.addWidget(filters_box)
+
+        self.results_table = QTableWidget(0, 5)
+        self.results_table.setHorizontalHeaderLabels(["Código", "Nombre", "Unidad", "Precio", "Categoría"])
+        self.results_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.results_table.verticalHeader().setVisible(False)
+        self.results_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.results_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.results_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.results_table.cellDoubleClicked.connect(self._add_selected_to_cart_quick)
+        left_lay.addWidget(self.results_table, stretch=1)
+
+        # Panel derecho
+        right = QWidget(); right_lay = QVBoxLayout(right)
+        right.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+        controls_box = QGroupBox("Detalle de selección")
+        controls_form = QFormLayout(controls_box)
+        self.qty_edit = QLineEdit("1"); self.qty_edit.setValidator(QDoubleValidator(0.0, 1e9, 4, self))
+        self.price_edit = QLineEdit(""); self.price_edit.setValidator(QDoubleValidator(0.0, 1e12, 4, self))
+        btn_add = QPushButton("Agregar al carrito"); btn_add.clicked.connect(self._add_selected_to_cart)
+        btn_manage = QPushButton("Gestionar Ítems…"); btn_manage.clicked.connect(self._open_items_management)
+        row_btns = QHBoxLayout(); row_btns.addWidget(btn_add); row_btns.addWidget(btn_manage)
+        controls_form.addRow("Cantidad:", self.qty_edit)
+        controls_form.addRow("Precio:", self.price_edit)
+        controls_form.addRow(row_btns)
+        right_lay.addWidget(controls_box)
+
+        cart_box = QGroupBox("Ítems seleccionados")
+        cart_lay = QVBoxLayout(cart_box)
+        self.cart_table = QTableWidget(0, 6)
+        self.cart_table.setHorizontalHeaderLabels(["Código", "Descripción", "Unidad", "Cantidad", "Precio Unitario", "Subtotal"])
+        self.cart_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.cart_table.verticalHeader().setVisible(False)
+        self.cart_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.cart_table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked | QTableWidget.EditTrigger.SelectedClicked)
+        # Delegate numérico en Cantidad (3) y Precio (4)
+        self.cart_table.setItemDelegateForColumn(3, NumericItemDelegate(4, self.cart_table))
+        self.cart_table.setItemDelegateForColumn(4, NumericItemDelegate(4, self.cart_table))
+        self.cart_table.itemChanged.connect(self._on_cart_item_changed)
+        self.cart_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        cart_lay.addWidget(self.cart_table)
+
+        cart_bottom = QHBoxLayout()
+        self.cart_total_label = QLabel("Total carrito: 0.00")
+        cart_bottom.addWidget(self.cart_total_label)
+        cart_bottom.addStretch(1)
+        btn_remove = QPushButton("Quitar seleccionado"); btn_remove.clicked.connect(self._remove_selected_cart)
+        btn_clear = QPushButton("Vaciar carrito"); btn_clear.clicked.connect(self._clear_cart)
+        cart_bottom.addWidget(btn_remove); cart_bottom.addWidget(btn_clear)
+        cart_lay.addLayout(cart_bottom)
+        right_lay.addWidget(cart_box, stretch=1)
+
+        splitter.addWidget(left)
+        splitter.addWidget(right)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+
+        # Botonera pie
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        ok = QPushButton("Aceptar"); ok.clicked.connect(self.accept)
+        cancel = QPushButton("Cancelar"); cancel.clicked.connect(self.reject)
+        actions.addWidget(ok); actions.addWidget(cancel)
+        root.addLayout(actions)
+
+    # ------- Persistencia de geometría -------
+    def _restore_geometry(self):
+        s = QSettings("FACOT", "ItemPickerDialog")
+        geom = s.value("geometry", None)
+        if geom:
+            try:
+                self.restoreGeometry(geom)
+            except Exception:
+                pass
+
+    def _save_geometry(self):
+        s = QSettings("FACOT", "ItemPickerDialog")
+        s.setValue("geometry", self.saveGeometry())
+
+    def accept(self):
+        self._save_geometry()
+        super().accept()
+
+    def reject(self):
+        self._save_geometry()
+        super().reject()
+
+    # ------- Datos auxiliares -------
+    def _load_categories(self):
+        db = get_db_path()
+        self.categories.clear()
+        self.category_filter.blockSignals(True)
+        self.category_filter.clear()
+        self.category_filter.addItem("Todas", None)
+        if db:
+            with sqlite3.connect(db) as conn:
+                rows = conn.execute(
+                    "SELECT id, IFNULL(name,''), IFNULL(code_prefix,'') FROM categories ORDER BY name"
+                ).fetchall()
+            for cid, name, prefix in rows:
+                self.categories.append((cid, name, prefix))
+                self.category_filter.addItem(f"{name} ({prefix})", cid)
+        self.category_filter.blockSignals(False)
+
+    # ------- Acciones -------
+    def _open_items_management(self):
+        dlg = ItemsManagementWindow(self)
+        dlg.exec()
+        current_cid = self.category_filter.currentData()
+        self._load_categories()
+        if current_cid:
+            idx = self.category_filter.findData(current_cid)
+            if idx >= 0:
+                self.category_filter.setCurrentIndex(idx)
+        self._search_items()
+
+    def _search_items(self):
+        text = (self.search_edit.text() or "").strip().lower()
+        sel_cid = self.category_filter.currentData()
+        db = get_db_path()
+        if not db:
+            QMessageBox.warning(self, "Base de datos", "No hay base de datos seleccionada.")
+            return
+        with sqlite3.connect(db) as conn:
+            cur = conn.cursor()
+            base_q = """
+                SELECT i.code, i.name, i.unit, i.price, IFNULL(c.name,'')
+                FROM items i
+                LEFT JOIN categories c ON c.id = i.category_id
+                WHERE (LOWER(i.code) LIKE ? OR LOWER(i.name) LIKE ? OR LOWER(IFNULL(c.name,'')) LIKE ?)
+            """
+            params = [f"%{text}%", f"%{text}%", f"%{text}%"]
+            if sel_cid:
+                base_q += " AND i.category_id = ?"
+                params.append(sel_cid)
+            base_q += " ORDER BY i.name"
+            cur.execute(base_q, params)
+            rows = cur.fetchall()
+        self.results_table.setRowCount(0)
+        for r, row in enumerate(rows):
+            self.results_table.insertRow(r)
+            for c, val in enumerate(row):
+                self.results_table.setItem(r, c, QTableWidgetItem(str(val)))
+
+    def _add_selected_to_cart_quick(self, row: int, col: int):
+        self._add_selected_to_cart(default_qty=True)
+
+    def _add_selected_to_cart(self, default_qty: bool = False):
+        r = self.results_table.currentRow()
+        if r < 0:
+            QMessageBox.information(self, "Selección", "Selecciona un ítem en la lista de resultados.")
+            return
+        code = self.results_table.item(r, 0).text()
+        name = self.results_table.item(r, 1).text()
+        unit = self.results_table.item(r, 2).text()
+        price_cell = self.results_table.item(r, 3)
+        price_def = float(price_cell.text()) if price_cell and price_cell.text() else 0.0
+
+        try:
+            qty = 1.0 if default_qty else float(self.qty_edit.text().replace(",", ".") or "1")
+            price_input = (self.price_edit.text() or "").replace(",", ".")
+            price = price_def if (default_qty and (price_input.strip() == "")) else float(price_input or price_def)
+        except ValueError:
+            QMessageBox.warning(self, "Validación", "Cantidad y Precio deben ser numéricos.")
+            return
+        if qty <= 0:
+            QMessageBox.warning(self, "Validación", "La cantidad debe ser mayor a cero.")
+            return
+        if price < 0:
+            QMessageBox.warning(self, "Validación", "El precio no puede ser negativo.")
+            return
+
+        found_row = -1
+        for i in range(self.cart_table.rowCount()):
+            if self.cart_table.item(i, 0).text() == code:
+                found_row = i
+                break
+        if found_row >= 0:
+            old_qty = float(self.cart_table.item(found_row, 3).text().replace(",", ""))
+            new_qty = old_qty + qty
+            self._updating_cart = True
+            self.cart_table.setItem(found_row, 3, QTableWidgetItem(f"{new_qty:.2f}"))
+            self.cart_table.setItem(found_row, 4, QTableWidgetItem(f"{price:.2f}"))
+            self.cart_table.setItem(found_row, 5, QTableWidgetItem(f"{new_qty * price:.2f}"))
+            self._updating_cart = False
+        else:
+            row = self.cart_table.rowCount()
+            self.cart_table.insertRow(row)
+            self.cart_table.setItem(row, 0, QTableWidgetItem(code))
+            self.cart_table.setItem(row, 1, QTableWidgetItem(name))
+            self.cart_table.setItem(row, 2, QTableWidgetItem(unit))
+            self.cart_table.setItem(row, 3, QTableWidgetItem(f"{qty:.2f}"))
+            self.cart_table.setItem(row, 4, QTableWidgetItem(f"{price:.2f}"))
+            self.cart_table.setItem(row, 5, QTableWidgetItem(f"{qty * price:.2f}"))
+
+        self.qty_edit.setText("1")
+        self._update_cart_total()
+
+    def _on_cart_item_changed(self, item: QTableWidgetItem):
+        if self._updating_cart:
+            return
+        row = item.row()
+        col = item.column()
+        if col not in (3, 4):
+            return
+        try:
+            qty = float(self.cart_table.item(row, 3).text().replace(",", "")) if self.cart_table.item(row, 3) else 0.0
+            price = float(self.cart_table.item(row, 4).text().replace(",", "")) if self.cart_table.item(row, 4) else 0.0
+        except Exception:
+            qty = 0.0; price = 0.0
+        qty = max(0.0, qty); price = max(0.0, price)
+        self._updating_cart = True
+        self.cart_table.setItem(row, 3, QTableWidgetItem(f"{qty:.2f}"))
+        self.cart_table.setItem(row, 4, QTableWidgetItem(f"{price:.2f}"))
+        self.cart_table.setItem(row, 5, QTableWidgetItem(f"{qty * price:.2f}"))
+        self._updating_cart = False
+        self._update_cart_total()
+
+    def _remove_selected_cart(self):
+        r = self.cart_table.currentRow()
+        if r >= 0:
+            self.cart_table.removeRow(r)
+            self._update_cart_total()
+
+    def _clear_cart(self):
+        self.cart_table.setRowCount(0)
+        self._update_cart_total()
+
+    def _update_cart_total(self):
+        total = 0.0
+        for r in range(self.cart_table.rowCount()):
+            try:
+                val = float(self.cart_table.item(r, 5).text().replace(",", "")) if self.cart_table.item(r, 5) else 0.0
+            except Exception:
+                val = 0.0
+            total += val
+        self.cart_total_label.setText(f"Total carrito: {total:,.2f}")
+
+    def get_selected_items(self) -> List[Dict]:
+        items: List[Dict] = []
+        for r in range(self.cart_table.rowCount()):
+            code = self.cart_table.item(r, 0).text()
+            name = self.cart_table.item(r, 1).text()
+            unit = self.cart_table.item(r, 2).text()
+            qty = float(self.cart_table.item(r, 3).text().replace(",", ""))
+            price = float(self.cart_table.item(r, 4).text().replace(",", ""))
+            subtotal = float(self.cart_table.item(r, 5).text().replace(",", ""))
+            items.append({
+                "codigo": code,
+                "nombre": name,
+                "unidad": unit,
+                "cantidad": qty,
+                "precio": price,
+                "subtotal": subtotal,
+            })
+        return items

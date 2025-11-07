@@ -1,0 +1,30 @@
+Lista de verificación antes de avanzar
+Ingreso de facturas:
+
+Se pueden agregar facturas en cualquier moneda.
+El sistema valida cliente, RNC, totales, ITBIS, etc.
+Calcula y guarda bien los montos en moneda extranjera y RD$.
+Limpieza del formulario:
+
+Al guardar una factura, el formulario se limpia automáticamente para la próxima.
+Actualización del historial:
+
+El historial de facturas se refresca y muestra la nueva factura sin necesidad de recargar la app.
+Selector de moneda y tasa de cambio:
+
+Si se elige otra moneda, pide la tasa y la usa para los cálculos.
+Validaciones:
+
+No permite guardar sin cliente ni RNC.
+No permite guardar si no hay items o si los importes son inválidos.
+Visualización:
+
+El dashboard y listas muestran todos los datos correctamente (nombre de cliente, ITBIS, montos, total RD$, moneda, etc.).
+
+Colores/etiquetas por categoría (guardar un color hex en categories.color).
+Impuesto por categoría (aplica ITBIS por defecto para ítems nuevos).
+Márgenes por categoría (sugerir precio = costo × (1 + margen)).
+Unidades favoritas por categoría.
+Múltiples listas de precios (price1, price2, price3) y selección por cliente o documento.
+Importación/exportación a CSV/Excel.
+Auditoría (created_at, updated_at, created_by).

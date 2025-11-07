@@ -1,0 +1,15 @@
+{
+  "show_logo": false,
+  "logo_path": "",
+  "header_lines": [
+    "",
+    "",
+    ""
+  ],
+  "footer_lines": [],
+  "primary_color": "#003a00",
+  "font_name": "Arial",
+  "font_size": 10,
+  "logo_width_px": 180,
+  "layout": "default"
+}

@@ -1,0 +1,15 @@
+
+py -m PyInstaller facot.spec --clean
+
+pyinstaller --name FACOT --onefile --windowed `
+--add-data "templates;templates" `
+--add-data "data/templates;data/templates" `
+--add-data "data/company_1;data/company_1" `
+--add-data "data/company_2;data/company_2" `
+--add-data "data/company_3;data/company_3" `
+--add-data "data/company_4;data/company_4" `
+--add-data "data/company_5;data/company_5" `
+--add-data "data/company_6;data/company_6" `
+--collect-all PyQt6 `
+--hidden-import PyQt6.QtWebEngineWidgets `
+main.py

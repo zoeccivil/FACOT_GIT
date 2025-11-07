@@ -1,0 +1,545 @@
+# utils/quotation_templates.py
+# Plantillas y generadores para Cotizaciones (Excel + PDF)
+# Esta versión mantiene la generación Excel y reemplaza/añade un generador PDF
+# con el layout tipo "HTML" que solicitaste (verde por defecto, logo de la empresa,
+# dirección desde los datos de la empresa / configuración y columnas completas:
+# código, descripción, unidad, cantidad, precio unitario, subtotal).
+#
+# Uso:
+#   generate_quotation_template(path)
+#   generate_quotation_excel(quotation_data, items, save_path, company_name="", template=None)
+#   generate_quotation_pdf(quotation_data, items, save_path, company_name="", template=None)
+#
+# Donde:
+# - quotation_data puede contener company_id, company_name, company_rnc, company_address, quotation_date, notes, itbis_rate, apply_itbis
+# - items es lista de dicts con keys: code, description, unit, quantity, unit_price
+# - template es un dict (opcional) con keys: primary_color (hex), show_logo (bool), logo_path (relativa a data/), footer_lines (list), header_lines (list), itbis_rate
+# - Si template es None y quotation_data contiene company_id, la plantilla se cargará automáticamente desde utils.template_manager.load_template
+#
+# Requiere: openpyxl (Excel), reportlab (PDF). Pillow opcional para redimensionar logos.
+
+from __future__ import annotations
+import os
+import datetime
+from typing import List, Dict, Optional
+
+# Excel (openpyxl)
+try:
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, Alignment, Border, Side, PatternFill, NamedStyle
+    from openpyxl.utils import get_column_letter
+    from openpyxl.drawing.image import Image as XLImage
+except Exception:
+    Workbook = None
+    XLImage = None
+
+# Pillow (opcional para redimensionar logos)
+try:
+    from PIL import Image as PILImage
+except Exception:
+    PILImage = None
+
+# PDF (reportlab)
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image as RLImage, Flowable
+    from reportlab.lib.units import mm
+    from reportlab.lib.enums import TA_LEFT, TA_RIGHT
+    REPORTLAB_AVAILABLE = True
+except Exception:
+    REPORTLAB_AVAILABLE = False
+
+# Template manager (JSON files in data/)
+from utils.template_manager import get_data_root, load_template
+from reportlab.lib.pagesizes import letter
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+def _resolve_template(data: Dict, template: Optional[Dict]) -> Dict:
+    tpl = template
+    if tpl is None and data.get("company_id") is not None:
+        try:
+            tpl = load_template(int(data.get("company_id")))
+        except Exception:
+            tpl = {}
+    if tpl is None:
+        tpl = {}
+    defaults = {
+        "primary_color": "#1f7a44",  # verde por defecto
+        "secondary_color": "#EEF8F1",
+        "show_logo": True,
+        "logo_path": "",
+        "header_lines": [],
+        "footer_lines": [],
+        "font_name": "Helvetica",
+        "font_size": 10,
+        "logo_width_px": 160,
+        "itbis_rate": 0.18,
+    }
+    out = dict(defaults)
+    out.update(tpl or {})
+    return out
+
+def _resolve_logo_path_rel_to_abs(logo_rel: str) -> Optional[str]:
+    if not logo_rel:
+        return None
+    if os.path.isabs(logo_rel) and os.path.exists(logo_rel):
+        return logo_rel
+    data_root = get_data_root()
+    abs_path = os.path.join(data_root, logo_rel)
+    if os.path.exists(abs_path):
+        return abs_path
+    if os.path.exists(logo_rel):
+        return os.path.abspath(logo_rel)
+    return None
+
+def _hex_to_reportlab_color(hex_color: str):
+    try:
+        if not hex_color:
+            return colors.HexColor("#1f7a44")
+        return colors.HexColor(hex_color)
+    except Exception:
+        return colors.HexColor("#1f7a44")
+
+def _escape_para(text: str) -> str:
+    if not text:
+        return ""
+    s = str(text)
+    s = s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    s = s.replace('"', "&quot;").replace("'", "&#039;")
+    return s
+
+# ------------------------------------------------------------------
+# Plantilla Excel (existente, ligera)
+# ------------------------------------------------------------------
+def generate_quotation_template(path: str):
+    """
+    Genera una plantilla Excel básica para cotizaciones.
+    """
+    if Workbook is None:
+        raise RuntimeError("openpyxl no está instalado. Instala con: pip install openpyxl")
+
+    wb = Workbook()
+    sh = wb.active
+    sh.title = "Cotizacion"
+
+    # Encabezado de la plantilla (campos a completar)
+    sh["A1"] = "company_name"
+    sh["B1"] = "quotation_date"
+    sh["C1"] = "client_name"
+    sh["D1"] = "client_rnc"
+    sh["E1"] = "currency"
+    sh["F1"] = "notes"
+
+    # Tabla de items (cabeceras)
+    start = 3
+    sh.cell(row=start, column=1, value="code (optional)")
+    sh.cell(row=start, column=2, value="description")
+    sh.cell(row=start, column=3, value="unit")
+    sh.cell(row=start, column=4, value="quantity")
+    sh.cell(row=start, column=5, value="unit_price")
+    sh.cell(row=start, column=6, value="subtotal (optional)")
+
+    # Ejemplo
+    sh.cell(row=start+1, column=2, value="Servicio técnico por hora")
+    sh.cell(row=start+1, column=3, value="HR")
+    sh.cell(row=start+1, column=4, value=1)
+    sh.cell(row=start+1, column=5, value=1500)
+
+    notes = wb.create_sheet("Notas")
+    notes["A1"] = "Instrucciones"
+    notes["A2"] = "- Rellena la fila 1: company_name, quotation_date (YYYY-MM-DD), client_name, client_rnc, currency, notes."
+    notes["A3"] = "- En 'Cotizacion' debajo de la fila de cabecera agrega las filas de items."
+
+    for col, width in enumerate([14, 50, 12, 12, 18, 18], start=1):
+        sh.column_dimensions[get_column_letter(col)].width = width
+
+    wb.save(path)
+
+# ------------------------------------------------------------------
+# Generador Excel (mantener compatibilidad)
+# ------------------------------------------------------------------
+def generate_quotation_excel(quotation_data: Dict, items: List[Dict], save_path: str, company_name: str = "", template: Dict = None):
+    """
+    Genera un Excel formateado de la Cotización.
+    Acepta template opcional; si no se pasa y existe company_id, lo carga automáticamente.
+    """
+    if Workbook is None:
+        raise RuntimeError("openpyxl no está instalado. Instala con: pip install openpyxl")
+
+    template = _resolve_template(quotation_data or {}, template)
+
+    wb = Workbook()
+    sh = wb.active
+    sh.title = "Cotizacion"
+
+    bold = Font(bold=True)
+    header_fill = PatternFill("solid", fgColor=template.get("primary_color", "#1f7a44").replace("#", ""))
+    border = Border(left=Side(style="thin"), right=Side(style="thin"),
+                    top=Side(style="thin"), bottom=Side(style="thin"))
+
+    # Insertar logo si existe
+    try:
+        if template.get("show_logo") and template.get("logo_path"):
+            logo_abs = _resolve_logo_path_rel_to_abs(template.get("logo_path"))
+            if logo_abs and XLImage is not None:
+                logo_w = int(template.get("logo_width_px", 160) or 160)
+                try:
+                    if PILImage is not None:
+                        pil = PILImage.open(logo_abs)
+                        ratio = pil.height / pil.width if pil.width else 1.0
+                        new_h = max(1, int(logo_w * ratio))
+                        import tempfile
+                        tf = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+                        tmp_path = tf.name
+                        pil_resized = pil.resize((logo_w, new_h))
+                        pil_resized.save(tmp_path, format="PNG")
+                        tf.close()
+                        img = XLImage(tmp_path)
+                        sh.add_image(img, "A1")
+                        try:
+                            os.remove(tmp_path)
+                        except Exception:
+                            pass
+                    else:
+                        img = XLImage(logo_abs)
+                        sh.add_image(img, "A1")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+    # Encabezado textual
+    sh.merge_cells("A1:F1")
+    sh["A1"] = company_name or quotation_data.get("company_name", "")
+    sh["A1"].font = Font(size=14, bold=True)
+
+    sh["A2"] = "Cotización:"
+    sh["B2"] = quotation_data.get("quotation_date", datetime.date.today().isoformat())
+    sh["A3"] = "Cliente:"
+    sh["B3"] = quotation_data.get("client_name", "")
+    sh["A4"] = "RNC/Cédula:"
+    sh["B4"] = quotation_data.get("client_rnc", "")
+    sh["A5"] = "Moneda:"
+    sh["B5"] = quotation_data.get("currency", "RD$")
+
+    # Tabla items
+    start_row = 8
+    headers = ["#", "Código", "Descripción", "Unidad", "Cantidad", "Precio Unitario", "Subtotal"]
+    for idx, h in enumerate(headers, start=1):
+        c = sh.cell(row=start_row, column=idx, value=h)
+        c.font = bold
+        try:
+            primary = template.get("primary_color")
+            if primary:
+                c.fill = PatternFill("solid", fgColor=primary.replace("#", ""))
+        except Exception:
+            c.fill = header_fill
+        c.alignment = Alignment(horizontal="center")
+        c.border = border
+
+    row = start_row + 1
+    total = 0.0
+    for i, it in enumerate(items, start=1):
+        code = it.get("code", "")
+        desc = it.get("description", "") or it.get("nombre", "")
+        unit = it.get("unit", "") or it.get("unidad", "")
+        qty = float(it.get("quantity", it.get("cantidad", 0)) or 0)
+        price = float(it.get("unit_price", it.get("precio", 0)) or 0)
+        subtotal = qty * price
+        total += subtotal
+
+        sh.cell(row=row, column=1, value=i).border = border
+        sh.cell(row=row, column=2, value=code).border = border
+        sh.cell(row=row, column=3, value=desc).border = border
+        sh.cell(row=row, column=4, value=unit).border = border
+        sh.cell(row=row, column=5, value=qty).border = border
+        pcell = sh.cell(row=row, column=6, value=price); pcell.number_format = '#,##0.00'; pcell.border = border
+        scell = sh.cell(row=row, column=7, value=subtotal); scell.number_format = '#,##0.00'; scell.border = border
+        row += 1
+
+    # Totales
+    itbis_rate = float(quotation_data.get("itbis_rate", template.get("itbis_rate", 0.0)) or 0.0)
+    sh.cell(row=row+1, column=6, value="Subtotal:").font = Font(bold=True)
+    sh.cell(row=row+1, column=7, value=total).number_format = '#,##0.00'
+    itbis = total * itbis_rate if quotation_data.get("apply_itbis") else 0.0
+    if itbis > 0:
+        sh.cell(row=row+2, column=6, value=f"ITBIS ({itbis_rate*100:.0f}%):").font = Font(bold=True)
+        sh.cell(row=row+2, column=7, value=itbis).number_format = '#,##0.00'
+        sh.cell(row=row+3, column=6, value="Total:").font = Font(bold=True)
+        sh.cell(row=row+3, column=7, value=total + itbis).number_format = '#,##0.00'
+    else:
+        sh.cell(row=row+2, column=6, value="Total:").font = Font(bold=True)
+        sh.cell(row=row+2, column=7, value=total).number_format = '#,##0.00'
+
+    notes = quotation_data.get("notes", "")
+    if notes:
+        nr = row + 5
+        sh.cell(row=nr, column=1, value="Notas:")
+        sh.cell(row=nr+1, column=1, value=notes)
+
+    widths = [6, 14, 50, 10, 12, 18, 18]
+    for i, w in enumerate(widths, start=1):
+        sh.column_dimensions[get_column_letter(i)].width = w
+
+    wb.save(save_path)
+
+# ------------------------------------------------------------------
+# Generador PDF (nuevo / reemplaza versión anterior)
+# ------------------------------------------------------------------
+# utils/quotation_templates.py
+from __future__ import annotations
+
+# imports estándar (ejemplo; conserva el resto de tus imports existentes)
+import os
+from typing import List, Dict, Optional
+
+from xml.sax.saxutils import escape
+from reportlab.lib.pagesizes import letter
+from reportlab.lib import colors
+from reportlab.lib.units import mm, inch
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, Flowable, KeepTogether
+)
+from reportlab.lib.enums import TA_RIGHT, TA_CENTER, TA_LEFT
+
+def _hex_to_color(hexstr: str):
+    try:
+        return colors.HexColor(hexstr)
+    except Exception:
+        return colors.HexColor('#034F84')  # fallback
+
+def _fmt_currency(n):
+    try:
+        return "{:,.2f}".format(float(n or 0))
+    except Exception:
+        return "0.00"
+
+def generate_quotation_pdf(quotation_data: Dict, items: List[Dict], save_path: str, company_name: str = "", template: Optional[Dict] = None):
+    """
+    Genera un PDF de cotización usando reportlab ajustado al layout HTML:
+    - tamaño Letter
+    - color primario tomado de template['primary_color'] o company primary_color
+    - cabecera con logo, empresa (MAYÚSCULAS), RNC, dirección, teléfono
+    - tabla de items con encabezado coloreado
+    - totales alineados a la derecha
+    - dos firmas al pie (Firma Autorizada / Recibido Por)
+    """
+    # Preparar template / colores
+    tpl = template or {}
+    primary_hex = (tpl.get("primary_color") or (quotation_data.get("template") or {}).get("primary_color")
+                   or (quotation_data.get("company") or {}).get("primary_color") or "#034F84")
+    secondary_hex = tpl.get("secondary_color") or "#E5E7EB"
+    primary_color = _hex_to_color(primary_hex)
+    secondary_color = _hex_to_color(secondary_hex)
+
+    # Documento
+    doc = SimpleDocTemplate(
+        save_path,
+        pagesize=letter,
+        leftMargin=15 * mm, rightMargin=15 * mm,
+        topMargin=15 * mm, bottomMargin=15 * mm
+    )
+
+    styles = getSampleStyleSheet()
+    normal = styles["Normal"]
+    normal.fontName = "Helvetica"
+    normal.fontSize = 10
+    bold = ParagraphStyle('bold', parent=normal, fontName="Helvetica-Bold")
+    small_muted = ParagraphStyle('muted_small', parent=normal, textColor=colors.HexColor('#6b7280'), fontSize=9)
+    company_style = ParagraphStyle('company', parent=bold, fontSize=12, alignment=TA_LEFT)
+    meta_style = ParagraphStyle('meta', parent=normal, fontSize=10, textColor=colors.HexColor('#6b7280'))
+    right_bold = ParagraphStyle('right_bold', parent=bold, alignment=TA_RIGHT)
+    total_label_style = ParagraphStyle('total_label', parent=bold, alignment=TA_RIGHT, fontSize=10)
+    total_value_style = ParagraphStyle('total_value', parent=right_bold, textColor=primary_color, fontSize=12)
+
+    story = []
+
+    # HEADER: logo + company info (left) and quotation meta (right)
+    company = quotation_data.get("company", {}) if isinstance(quotation_data.get("company"), dict) else {}
+    # allow company fields in top-level keys if the caller uses that shape
+    if not company:
+        company = {
+            "name": quotation_data.get("company_name") or company_name or "",
+            "rnc": quotation_data.get("company_rnc") or "",
+            "address_line1": quotation_data.get("company_address") or quotation_data.get("company_address_line1") or "",
+            "address_line2": quotation_data.get("company_address_line2") or "",
+            "phone": quotation_data.get("company_phone") or quotation_data.get("company_telefono") or ""
+        }
+
+    # Logo: resolve path if file:/// etc
+    logo_flowable = None
+    logo_path = company.get("logo_path") or tpl.get("logo_path") or ""
+    if logo_path:
+        # normalize file:/// or absolute paths
+        if logo_path.startswith("file:///"):
+            logo_fs = logo_path.replace("file:///", "")
+        else:
+            logo_fs = logo_path
+        if os.path.exists(logo_fs):
+            try:
+                logo_img = Image(logo_fs, width=120, height=68, kind='proportional')
+                logo_flowable = logo_img
+            except Exception:
+                logo_flowable = None
+
+    # Build header table with 2 columns
+    left_parts = []
+    if logo_flowable:
+        left_parts.append(logo_flowable)
+    # Company text
+    comp_lines = []
+    comp_name = (company.get("name") or "").upper()
+    comp_lines.append(Paragraph(comp_name, company_style))
+    if company.get("rnc"):
+        comp_lines.append(Paragraph(f"RNC: {escape(str(company.get('rnc')))}", meta_style))
+    if company.get("address_line1"):
+        comp_lines.append(Paragraph(escape(str(company.get("address_line1"))), small_muted))
+    if company.get("address_line2"):
+        comp_lines.append(Paragraph(escape(str(company.get("address_line2"))), small_muted))
+    if company.get("phone"):
+        comp_lines.append(Paragraph(escape(str(company.get("phone"))), small_muted))
+
+    left_cell = left_parts + comp_lines if left_parts else comp_lines
+
+    # Right side: quotation number + date
+    qnum = quotation_data.get("number") or quotation_data.get("quotation_number") or ""
+    qdate = quotation_data.get("date") or quotation_data.get("quotation_date") or ""
+    right_cell = [
+        Paragraph(f'<font color="{primary_hex}"><b>COTIZACIÓN N°: {escape(str(qnum))}</b></font>', normal),
+        Paragraph(f'FECHA: {escape(str(qdate))}', meta_style)
+    ]
+
+    header_table = Table([[left_cell, right_cell]], colWidths=[doc.width * 0.65, doc.width * 0.35])
+    header_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    story.append(header_table)
+    story.append(Spacer(1, 8))
+
+    # CLIENT block with secondary background: create a table cell with background
+    client_rows = []
+    client_name = quotation_data.get("client_name") or quotation_data.get("customer_name") or ""
+    client_rnc = quotation_data.get("client_rnc") or quotation_data.get("customer_rnc") or ""
+    client_left = [
+        Paragraph('<b style="color:var(--primary)">DATOS DEL CLIENTE</b>', normal),
+        Spacer(1, 4),
+        Paragraph(f'<b>NOMBRE O RAZÓN SOCIAL:</b> {escape(str(client_name))}', normal),
+        Paragraph(f'<b>RNC CLIENTE:</b> {escape(str(client_rnc))}', normal)
+    ]
+    client_table = Table([[client_left]], colWidths=[doc.width])
+    client_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), secondary_color),
+        ("BOX", (0, 0), (-1, -1), 0, colors.white),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("TOPPADDING", (0,0), (-1,-1), 8),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 8),
+    ]))
+    story.append(client_table)
+    story.append(Spacer(1, 10))
+
+    # ITEMS TABLE
+    data = []
+    # header
+    data.append([
+        Paragraph("Cant.", bold),
+        Paragraph("Código / Descripción", bold),
+        Paragraph("Unidad", bold),
+        Paragraph("Valor (RD$)", bold),
+        Paragraph("Subtotal (RD$)", bold)
+    ])
+    # rows
+    for it in items:
+        code = it.get("code") or it.get("codigo") or ""
+        desc = it.get("description") or it.get("descripcion") or ""
+        qty = it.get("quantity") or it.get("cantidad") or 0
+        unit = it.get("unit") or it.get("unidad") or ""
+        up = it.get("unit_price") or it.get("unitario") or 0
+        line = (float(qty) or 0) * (float(up) or 0)
+        data.append([
+            Paragraph(str(qty), normal),
+            Paragraph(f'<b>{escape(str(code))}</b><br/><font color="#6b7280">{escape(str(desc))}</font>', normal),
+            Paragraph(str(unit), normal),
+            Paragraph(_fmt_currency(up), normal),
+            Paragraph(_fmt_currency(line), normal),
+        ])
+
+    table = Table(data, colWidths=[doc.width * 0.08, doc.width * 0.52, doc.width * 0.10, doc.width * 0.15, doc.width * 0.15])
+    table_style = TableStyle([
+        ("GRID", (0, 0), (-1, -1), 0, colors.white),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.5, primary_color),
+        ("BACKGROUND", (0, 0), (-1, 0), primary_color),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (0, 0), (0, -1), "CENTER"),
+        ("ALIGN", (3, 1), (4, -1), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+    ])
+    table.setStyle(table_style)
+    story.append(table)
+    story.append(Spacer(1, 8))
+
+    # Totals block: right aligned
+    subtotal = sum((float(it.get("quantity") or it.get("cantidad") or 0) * float(it.get("unit_price") or it.get("unitario") or 0)) for it in items)
+    itbis_rate = float((tpl.get("itbis_rate") or quotation_data.get("itbis_rate") or 0.18))
+    itbis_amount = subtotal * itbis_rate
+    total = subtotal + itbis_amount
+
+    totals_data = [
+        [Paragraph("SUBTOTAL RD$:", normal), Paragraph(_fmt_currency(subtotal), right_bold)],
+        [Paragraph(f'ITBIS ({int(itbis_rate*100)}%):', normal), Paragraph(_fmt_currency(itbis_amount), right_bold)],
+        [Paragraph('<b>TOTAL RD$:</b>', total_label_style), Paragraph(_fmt_currency(total), total_value_style)]
+    ]
+    totals_table = Table(totals_data, colWidths=[doc.width * 0.6, doc.width * 0.4])
+    totals_table.setStyle(TableStyle([
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("LEFTPADDING", (0,0), (-1,-1), 6),
+        ("RIGHTPADDING", (0,0), (-1,-1), 6),
+        ("TOPPADDING", (0,0), (-1,-1), 2),
+        ("BOTTOMPADDING", (0,0), (-1,-1), 2),
+        ("LINEABOVE", (0, 2), (-1, 2), 0.5, colors.lightgrey),
+    ]))
+    story.append(Spacer(1, 6))
+    story.append(totals_table)
+
+    # Footer/conditions (optional)
+    if tpl.get("footer_lines"):
+        story.append(Spacer(1, 8))
+        for line in tpl.get("footer_lines"):
+            story.append(Paragraph(line, small_muted))
+
+    # Add flexible spacer to push signatures to bottom of page
+    # Compute a reasonable spacer: letter height minus margins minus an estimated used height.
+    # For simplicity use a large spacer; if the content is long it will be ignored (flow to next page).
+    story.append(Spacer(1, 80 * mm))
+
+    # Signature area: two blocks
+    sig_table = Table([
+        [
+            Paragraph('<para align="center"><u>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</u></para>', normal),
+            Paragraph('<para align="center"><u>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</u></para>', normal)
+        ],
+        [
+            Paragraph('<para align="center"><b>Firma Autorizada</b></para>', normal),
+            Paragraph('<para align="center"><b>Recibido Por</b></para>', normal)
+        ]
+    ], colWidths=[doc.width * 0.45, doc.width * 0.45])
+    sig_table.setStyle(TableStyle([
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("TOPPADDING", (0,0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0,0), (-1, -1), 2),
+    ]))
+    story.append(sig_table)
+
+    # Build PDF
+    doc.build(story)
+
+    return True

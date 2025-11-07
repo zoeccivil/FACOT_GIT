@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Formato de Cotización</title>
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    @page { size: Letter; margin: 18mm; }
+
+    :root{
+      --primary: #1f7a44;
+      --secondary: #EEF8F1;
+      --muted: #6b7280;
+      --bg: #f4f7f6;
+      --text: #111827;
+    }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: var(--bg);
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+      box-sizing: border-box;
+      display: flex;
+      align-items: flex-start;
+      justify-content: center;
+      padding-top: 12mm;
+      font-family: Inter, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      color: var(--text);
+    }
+
+    .print-area {
+      box-sizing: border-box;
+      width: 816px;
+      max-width: calc(100% - 36mm);
+      background: #fff;
+      border-radius: 6px;
+      padding: 18px 22px;
+      border: 1px solid #e6eee6;
+      box-shadow: 0 6px 18px rgba(15,23,42,0.04);
+      display: flex;
+      flex-direction: column;
+      min-height: calc(11in - 36mm);
+      justify-content: space-between;
+      overflow: hidden;
+    }
+
+    .company-header { display:flex; gap:12px; align-items:flex-start; }
+    .company-logo { width:78px; height:64px; display:flex; align-items:center; justify-content:center; border-radius:6px; background:var(--secondary); color:var(--muted); font-weight:700; }
+    .company-name { font-weight: 700; font-size: 1.15rem; text-transform: uppercase; color: var(--text); }
+    .company-meta { color: var(--muted); font-size: 0.90rem; margin-top:6px; }
+
+    .header-top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; border-bottom:1px solid #e6e6e6; padding-bottom:14px; }
+    .right-meta { text-align:right; min-width:160px; }
+    .quote-label { color:var(--primary); font-weight:700; font-size:0.95rem; }
+    .quote-number { color:var(--primary); font-weight:900; font-size:20px; margin-top:4px; }
+    .quote-date { color:var(--muted); font-size:0.88rem; margin-top:6px; }
+
+    .client-box { background:var(--secondary); padding:12px; border-radius:6px; margin-top:14px; display:flex; justify-content:space-between; align-items:flex-start; gap:12px; }
+    .client-left { flex:1; }
+    .client-label { color:var(--primary); font-weight:700; margin-bottom:6px; font-size:0.92rem; }
+    .client-name { font-weight:700; color:#1f2937; }
+
+    .items-wrap { margin-top:18px; }
+    .items-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+    .items-table thead th {
+      background: var(--primary); color:#fff; padding:10px 12px; font-weight:700; text-align:left; font-size:0.95rem;
+    }
+    .items-table th, .items-table td { padding:10px 12px; border-bottom:1px solid #e9ecec; font-size:0.95rem; vertical-align:top; }
+    .items-table td.code { font-weight:700; color:#1f2937; }
+    .items-table td.desc { color:var(--muted); font-size:0.88rem; margin-top:4px; display:block; }
+    .items-table td.qty { width:60px; text-align:center; }
+    .items-table td.unit { width:80px; text-align:center; color:var(--muted); }
+    .items-table td.right { text-align:right; }
+
+    .totals { display:flex; justify-content:flex-end; margin-top:14px; }
+    .totals-box { width:340px; }
+    .totals-row { display:flex; justify-content:space-between; padding:6px 0; color:var(--muted); font-size:0.95rem; }
+    .totals-row.total { font-weight:900; color:var(--primary); font-size:1.05rem; border-top:1px solid rgba(0,0,0,0.06); padding-top:10px; margin-top:8px; }
+
+    .signature-area { margin-top:36px; display:flex; justify-content:space-between; gap:30px; align-items:flex-start; }
+    .signature-block { width:45%; text-align:center; }
+    .signature-line { height:1px; background:#111; width:100%; margin:0 auto 8px auto; display:block; }
+    .signature-label { font-size:0.88rem; color:var(--muted); }
+
+    @media print {
+      html,body { display:block; padding:0; }
+      .print-area { padding:12mm; box-shadow:none; border-radius:0; min-height:calc(11in - 36mm); }
+    }
+  </style>
+
+  <script>
+    // read JSON injected OR accept globals
+    function readInjectedJSON() {
+      try {
+        if (typeof window.COMPANY !== 'undefined' && window.COMPANY && Object.keys(window.COMPANY).length > 0) {
+          window.TEMPLATE = window.TEMPLATE || {};
+          window.QUOTATION = window.QUOTATION || {};
+          return;
+        }
+        var node = document.getElementById('quotation-data');
+        if (node && node.textContent && node.textContent.trim() && node.textContent.trim() !== '{"COMPANY": {"id": 1, "name": "Barnhouse Services Srl", "rnc": "1-32-04275-1", "address_line1": "", "address_line2": "", "phone": "", "logo_path": "file:///E:/Dropbox/PROGAIN/FACOT/data/company_1/logo.png"}, "TEMPLATE": {"show_logo": true, "logo_path": "company_1/logo.png", "header_lines": ["", "", ""], "footer_lines": [], "primary_color": "#555502", "font_name": "Arial", "font_size": 10, "logo_width_px": 180, "layout": "default", "itbis_rate": 0.18}, "QUOTATION": {"number": "QT-1-20251017-105333", "date": "2025-10-17", "client_name": "OYSHO", "client_rnc": "131369601", "items": [{"code": "EQU0001", "description": "RETROPALA 416 E", "unit": "HR", "quantity": 15.0, "unit_price": 3500.0}], "notes": ""}}') {
+          var payload = JSON.parse(node.textContent);
+          window.COMPANY = payload.COMPANY || {};
+          window.TEMPLATE = payload.TEMPLATE || {};
+          window.QUOTATION = payload.QUOTATION || {};
+          return;
+        }
+      } catch (e) {
+        console.warn('Error parsing injected JSON', e);
+      }
+      window.COMPANY = window.COMPANY || {};
+      window.TEMPLATE = window.TEMPLATE || {};
+      window.QUOTATION = window.QUOTATION || {};
+    }
+
+    function formatCurrency(n) {
+      n = Number(n) || 0;
+      return new Intl.NumberFormat('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+    }
+
+    function escapeHtml(text) {
+      if (!text) return "";
+      return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function setColorVariables() {
+      try {
+        var p = (window.TEMPLATE && window.TEMPLATE.primary_color) || (window.COMPANY && window.COMPANY.primary_color) || '#1f7a44';
+        document.documentElement.style.setProperty('--primary', p);
+        var sec = (window.TEMPLATE && window.TEMPLATE.secondary_color) || '#EEF8F1';
+        document.documentElement.style.setProperty('--secondary', sec);
+      } catch (e) {
+        console.warn('setColorVariables error', e);
+      }
+    }
+
+    // Render functions are defensive: check element existence before writing
+    function renderHeader() {
+      try {
+        var comp = window.COMPANY || {};
+        var tpl = window.TEMPLATE || {};
+        var logoSrc = comp.logo_path || tpl.logo_path || '';
+        var logoContainer = document.getElementById('company-logo');
+        if (logoContainer) {
+          if (tpl.show_logo && logoSrc) {
+            var img = document.createElement('img');
+            img.src = logoSrc;
+            img.alt = comp.name || 'logo';
+            img.style.maxWidth = '100%';
+            img.style.maxHeight = '100%';
+            logoContainer.innerHTML = '';
+            logoContainer.appendChild(img);
+          } else {
+            logoContainer.innerHTML = '<div class="company-logo">LOGO</div>';
+          }
+        }
+
+        var name = comp.name || comp.company_name || '';
+        var elName = document.getElementById('company-name');
+        if (elName) elName.textContent = name.toString().toUpperCase();
+
+        // company-meta (single block with rnc/address/phone) - optional
+        var metaNode = document.getElementById('company-meta');
+        if (metaNode) {
+          var parts = [];
+          if (comp.rnc) parts.push('RNC: ' + escapeHtml(comp.rnc));
+          if (comp.address_line1) parts.push(escapeHtml(comp.address_line1));
+          if (comp.address_line2) parts.push(escapeHtml(comp.address_line2));
+          if (comp.phone) parts.push(escapeHtml(comp.phone));
+          metaNode.innerHTML = parts.join('<br/>');
+        }
+
+        var addrNode = document.getElementById('company-address');
+        if (addrNode) addrNode.textContent = comp.address_line1 || '';
+        var addr2Node = document.getElementById('company-address-2');
+        if (addr2Node) {
+          if (comp.address_line2) { addr2Node.style.display = 'block'; addr2Node.textContent = comp.address_line2; } else { addr2Node.style.display = 'none'; }
+        }
+        var phoneNode = document.getElementById('company-phone');
+        if (phoneNode) phoneNode.textContent = comp.phone || '';
+      } catch (e) {
+        console.warn('renderHeader error', e);
+      }
+    }
+
+    function renderMeta() {
+      try {
+        var q = window.QUOTATION || {};
+        var qnumNode = document.getElementById('quotation-number');
+        if (qnumNode) qnumNode.textContent = 'COTIZACIÓN N°: ' + (q.number || '');
+        var qdateNode = document.getElementById('quotation-date');
+        if (qdateNode) qdateNode.textContent = 'FECHA: ' + (q.date || '');
+      } catch (e) {
+        console.warn('renderMeta error', e);
+      }
+    }
+
+    function renderClient() {
+      try {
+        var q = window.QUOTATION || {};
+        var cn = document.getElementById('client-name');
+        if (cn) cn.textContent = q.client_name || '';
+        var cr = document.getElementById('client-rnc');
+        if (cr) cr.textContent = q.client_rnc || '';
+      } catch (e) {
+        console.warn('renderClient error', e);
+      }
+    }
+
+    function renderItemsAndTotals() {
+      try {
+        var q = window.QUOTATION || {};
+        var items = q.items || [];
+        var tbody = document.getElementById('items-table-body');
+        if (!tbody) return;
+        var html = '';
+        var subtotal = 0;
+        for (var i = 0; i < items.length; i++) {
+          var it = items[i];
+          var qty = Number(it.quantity) || 0;
+          var up = Number(it.unit_price) || 0;
+          var line = qty * up;
+          subtotal += line;
+          html += '<tr>';
+          html += '<td class="qty" style="width:60px;text-align:center;">' + escapeHtml(qty) + '</td>';
+          html += '<td><div class="code">' + escapeHtml(it.code || '') + '</div><div class="desc">' + escapeHtml(it.description || '') + '</div></td>';
+          html += '<td class="unit" style="width:80px;text-align:center;">' + escapeHtml(it.unit || '') + '</td>';
+          html += '<td class="right" style="width:120px;text-align:right;">' + formatCurrency(up) + '</td>';
+          html += '<td class="right" style="width:120px;text-align:right;">' + formatCurrency(line) + '</td>';
+          html += '</tr>';
+        }
+        tbody.innerHTML = html;
+
+        var itbis_rate = Number((window.TEMPLATE && window.TEMPLATE.itbis_rate) || 0.18);
+        var itbisAmount = subtotal * itbis_rate;
+        var total = subtotal + itbisAmount;
+        var subtNode = document.getElementById('subtotal');
+        if (subtNode) subtNode.textContent = formatCurrency(subtotal);
+        var itbisNode = document.getElementById('itbis');
+        if (itbisNode) itbisNode.textContent = formatCurrency(itbisAmount);
+        var totNode = document.getElementById('total');
+        if (totNode) totNode.textContent = formatCurrency(total);
+        var itbisRateNode = document.getElementById('itbis-rate');
+        if (itbisRateNode) itbisRateNode.textContent = (itbis_rate * 100).toFixed(0) + '%';
+      } catch (e) {
+        console.warn('renderItemsAndTotals error', e);
+      }
+    }
+
+    function renderFooter() {
+      try {
+        var footerNode = document.getElementById('footer-lines');
+        if (!footerNode) return;
+        footerNode.innerHTML = '';
+        var flines = (window.TEMPLATE && window.TEMPLATE.footer_lines) || [];
+        for (var i = 0; i < flines.length; i++) {
+          var p = document.createElement('p');
+          p.className = 'text-xs muted';
+          p.textContent = flines[i];
+          footerNode.appendChild(p);
+        }
+        var sig = (window.TEMPLATE && window.TEMPLATE.signature_name) || '';
+        var sigNode = document.getElementById('authorized-signature-name');
+        if (sigNode) sigNode.textContent = sig.toString().toUpperCase();
+      } catch (e) {
+        console.warn('renderFooter error', e);
+      }
+    }
+
+    function renderAll() {
+      setColorVariables();
+      renderHeader();
+      renderMeta();
+      renderClient();
+      renderItemsAndTotals();
+      renderFooter();
+    }
+
+    window.onload = function () {
+      try { readInjectedJSON(); } catch (e) { console.warn(e); }
+      try { renderAll(); } catch (e) { console.error('Render error', e); }
+    };
+  </script>
+</head>
+<body>
+  <script id="quotation-data" type="application/json">{"COMPANY": {"id": 1, "name": "Barnhouse Services Srl", "rnc": "1-32-04275-1", "address_line1": "", "address_line2": "", "phone": "", "logo_path": "file:///E:/Dropbox/PROGAIN/FACOT/data/company_1/logo.png"}, "TEMPLATE": {"show_logo": true, "logo_path": "company_1/logo.png", "header_lines": ["", "", ""], "footer_lines": [], "primary_color": "#555502", "font_name": "Arial", "font_size": 10, "logo_width_px": 180, "layout": "default", "itbis_rate": 0.18}, "QUOTATION": {"number": "QT-1-20251017-105333", "date": "2025-10-17", "client_name": "OYSHO", "client_rnc": "131369601", "items": [{"code": "EQU0001", "description": "RETROPALA 416 E", "unit": "HR", "quantity": 15.0, "unit_price": 3500.0}], "notes": ""}}</script>
+
+  <div class="print-area" id="quotation-document">
+    <div class="content">
+      <div class="header-top">
+        <div class="company-header">
+          <div id="company-logo"><div class="company-logo">LOGO</div></div>
+          <div>
+            <div id="company-name" class="company-name">NOMBRE EMPRESA</div>
+            <div id="company-meta" class="company-meta">RNC: ...</div>
+            <div id="company-address" style="display:none;"></div>
+            <div id="company-address-2" style="display:none;"></div>
+            <div id="company-phone" style="display:none;"></div>
+          </div>
+        </div>
+
+        <div class="right-meta">
+          <div id="quotation-number" class="quote-label">COTIZACIÓN N°:</div>
+          <div id="quotation-number-large" class="quote-number" style="display:none"></div>
+          <div id="quotation-date" class="quote-date">FECHA: --/--/----</div>
+        </div>
+      </div>
+
+      <div class="client-box">
+        <div class="client-left">
+          <div class="client-label">DATOS DEL CLIENTE</div>
+          <div id="client-name" class="client-name">Cliente</div>
+        </div>
+        <div class="client-right" style="text-align:right;">
+          <div style="font-weight:700; color:var(--muted);">RNC CLIENTE:</div>
+          <div id="client-rnc" style="font-weight:700; color:#1f2937;"></div>
+        </div>
+      </div>
+
+      <div class="items-wrap">
+        <h3 style="color:var(--primary); margin-top:14px; font-weight:700;">DETALLE DE SERVICIOS / PRODUCTOS</h3>
+        <div style="height:12px"></div>
+        <div class="shadow-sm rounded-md overflow-hidden">
+          <table class="items-table">
+            <thead>
+              <tr>
+                <th style="width:60px; text-align:center">Cant.</th>
+                <th>Código / Descripción</th>
+                <th style="width:80px; text-align:center">Unidad</th>
+                <th style="width:120px; text-align:right">Valor (RD$)</th>
+                <th style="width:120px; text-align:right">SUBTOTAL (RD$)</th>
+              </tr>
+            </thead>
+            <tbody id="items-table-body" class="bg-white"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="totals">
+        <div class="totals-box">
+          <div class="totals-row"><div>SUBTOTAL RD$:</div><div id="subtotal">0.00</div></div>
+          <div class="totals-row"><div>ITBIS (<span id="itbis-rate">18%</span>):</div><div id="itbis">0.00</div></div>
+          <div class="totals-row total"><div>TOTAL RD$:</div><div id="total">0.00</div></div>
+        </div>
+      </div>
+
+      <div id="footer-lines" class="footer-conditions" style="margin-top:20px"></div>
+
+      <div class="signature-area">
+        <div class="signature-block">
+          <span class="signature-line"></span>
+          <div id="authorized-signature-name" style="font-weight:700;"></div>
+          <div class="signature-label">Firma Autorizada</div>
+        </div>
+
+        <div class="signature-block">
+          <span class="signature-line"></span>
+          <div style="height:18px;"></div>
+          <div class="signature-label">Recibido Por</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

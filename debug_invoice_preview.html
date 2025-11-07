@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Formato de Factura</title>
+
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <style>
+        @page { size: Letter; margin: 18mm; }
+
+        :root{
+            --primary: #1f7a44; /* Green */
+            --secondary: #EEF8F1;
+            --muted: #6b7280;
+            --bg: #f4f7f6;
+            --text: #111827;
+        }
+
+        html, body {
+            height: 100%;
+            margin: 0;
+            background: var(--bg);
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+            box-sizing: border-box;
+            display: flex;
+            align-items: flex-start;
+            justify-content: center;
+            padding-top: 12mm;
+            font-family: Inter, system-ui, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            color: var(--text);
+        }
+
+        .print-area {
+            box-sizing: border-box;
+            width: 816px;
+            max-width: calc(100% - 36mm);
+            background: #fff;
+            border-radius: 12px;
+            padding: 30px 40px;
+            border: 1px solid #e6eee6;
+            box-shadow: 0 10px 30px rgba(15,23,42,0.06);
+            display: flex;
+            flex-direction: column;
+            min-height: calc(11in - 36mm);
+            justify-content: space-between;
+            overflow: hidden;
+        }
+
+        .header-top { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; border-bottom:2px solid var(--primary); padding-bottom:18px; }
+        .company-header { display:flex; gap:16px; align-items:center; }
+        .company-logo { width:68px; height:68px; display:flex; align-items:center; justify-content:center; border-radius:10px; background:var(--secondary); color:var(--primary); font-weight:900; font-size:1.1rem; border:2px solid var(--primary); overflow:hidden;}
+        .company-logo img{max-width:100%;max-height:100%;display:block;}
+        .company-name { font-weight: 900; font-size: 1.25rem; text-transform: uppercase; color: var(--text); line-height:1.1; }
+        .company-meta { color: var(--muted); font-size: 0.85rem; margin-top:4px; line-height:1.3; }
+
+        .right-meta { text-align:right; min-width:180px; }
+        .invoice-type { color:var(--primary); font-weight:900; font-size:1.05rem; margin-bottom:4px; text-transform:uppercase; }
+        .invoice-label { color:var(--text); font-weight:700; font-size:0.9rem; display:inline-block; margin-right:8px; }
+        .invoice-value { color:var(--primary); font-weight:900; font-size:0.95rem; display:inline-block; }
+        .invoice-date { color:var(--muted); font-size:0.82rem; margin-top:6px; }
+
+        .client-box { background:var(--secondary); padding:14px; border-radius:10px; margin-top:20px; display:grid; grid-template-columns: 1fr 1fr; gap:12px 20px; border:1px solid #dfeee1; }
+        .client-label { color:var(--primary); font-weight:700; margin-bottom:6px; font-size:0.82rem; text-transform:uppercase; }
+        .client-name { font-weight:700; color:#1f2937; font-size:1rem; }
+        .client-info-item { line-height:1.3; }
+
+        .items-wrap { margin-top:20px; }
+        .items-table { width:100%; border-collapse:collapse; table-layout:fixed; font-size:0.92rem; }
+        .items-table thead th {
+            background: var(--primary); color:#fff; padding:10px 12px; font-weight:700; text-align:left; font-size:0.95rem; border:none;
+        }
+        .items-table th, .items-table td { padding:10px 12px; border-bottom:1px solid #e9ecec; vertical-align:top; word-break:break-word; }
+        .items-table td.code { font-weight:700; color:#1f2937; }
+        .items-table td.desc { color:var(--muted); font-size:0.86rem; display:block; margin-top:4px; }
+        .items-table td.qty { width:8%; text-align:center; }
+        .items-table td.unit { width:12%; text-align:center; color:var(--muted); }
+        .items-table td.right { text-align:right; }
+
+        .totals { display:flex; justify-content:flex-end; margin-top:18px; }
+        .totals-box { width:320px; background:#fafafa; border-radius:6px; padding:12px 18px; border:1px solid #e0e0e0; }
+        .totals-row { display:flex; justify-content:space-between; padding:6px 0; color:var(--muted); font-size:0.92rem; }
+        .totals-row.total { font-weight:900; color:var(--primary); font-size:1.15rem; border-top:2px solid var(--primary); padding-top:10px; margin-top:10px; }
+
+        .signature-area { margin-top:40px; display:flex; justify-content:space-between; gap:50px; align-items:flex-end; }
+        .signature-line { height:1px; background:#111; width:100%; margin:0 auto 8px auto; display:block; }
+        .signature-label { font-size:0.82rem; color:var(--muted); }
+
+        .footer-conditions { font-size:0.82rem; color:#4b5563; margin-top:14px; line-height:1.4; }
+
+        @media print {
+            html,body { display:block; padding:0; }
+            .print-area { padding:12mm; box-shadow:none; border-radius:0; min-height:11in; max-width:100%; }
+        }
+    </style>
+
+    <script>
+        function readInjectedJSON() {
+            try {
+                if (typeof window.COMPANY !== 'undefined' && window.COMPANY && Object.keys(window.COMPANY).length > 0) {
+                    window.TEMPLATE = window.TEMPLATE || {};
+                    window.INVOICE = window.INVOICE || {};
+                    return;
+                }
+                var node = document.getElementById('invoice-data');
+                if (node && node.textContent && node.textContent.trim() && node.textContent.trim() !== '{"COMPANY": {"id": 1, "name": "Barnhouse Services Srl", "rnc": "1-32-04275-1", "address_line1": "", "address_line2": "", "phone": "", "email": "", "logo_path": "file:///E:/Dropbox/PROGAIN/FACOT/data/company_1/logo.png"}, "TEMPLATE": {"show_logo": true, "logo_path": "company_1/logo.png", "header_lines": ["", "", ""], "footer_lines": [], "primary_color": "#555502", "font_name": "Arial", "font_size": 10, "logo_width_px": 180, "layout": "default", "itbis_rate": 0.18}, "QUOTATION": {"company_id": 1, "number": "INV-1-20251017-114200", "ncf": "B0100000150", "date": "2025-10-17", "client_name": "FIRST POT SHABU SHABU SRL", "client_rnc": "131887651", "items": [{"code": "ELE004", "description": "REDUCCION DE 25*20 PPR", "unit": "UND", "quantity": 100.0, "unit_price": 25.0}, {"code": "ELE006", "description": "COUPLIN DE 25 PPR", "unit": "UND", "quantity": 200.0, "unit_price": 35.0}, {"code": "ELE016", "description": "ALAMBRE THHN NO.4 BLANCO", "unit": "M", "quantity": 500.0, "unit_price": 75.0}], "notes": ""}}') {
+                    var payload = JSON.parse(node.textContent);
+                    window.COMPANY = payload.COMPANY || {};
+                    window.TEMPLATE = payload.TEMPLATE || {};
+                    window.INVOICE = payload.INVOICE || {};
+                    return;
+                }
+            } catch (e) {
+                console.warn('Error parsing injected JSON', e);
+            }
+            window.COMPANY = window.COMPANY || {};
+            window.TEMPLATE = window.TEMPLATE || {};
+            window.INVOICE = window.INVOICE || {};
+        }
+
+        function formatCurrency(n) {
+            n = Number(n) || 0;
+            return new Intl.NumberFormat('es-DO', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(n);
+        }
+
+        function formatDate(dateString) {
+            if (!dateString) return 'N/A';
+            try {
+                const date = new Date(dateString);
+                return date.toLocaleDateString('es-DO', { day: '2-digit', month: '2-digit', year: 'numeric' });
+            } catch (e) {
+                return dateString;
+            }
+        }
+
+        function escapeHtml(text) {
+            if (text === null || text === undefined) return "";
+            return String(text)
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#039;');
+        }
+
+        function setColorVariables() {
+            try {
+                var p = (window.TEMPLATE && window.TEMPLATE.primary_color) || (window.COMPANY && window.COMPANY.primary_color) || '#1f7a44';
+                document.documentElement.style.setProperty('--primary', p);
+            } catch (e) {
+                console.warn('setColorVariables error', e);
+            }
+        }
+
+        function renderHeader() {
+            try {
+                var comp = window.COMPANY || {};
+                var elName = document.getElementById('company-name');
+                if (elName) elName.textContent = (comp.name || comp.company_name || 'NOMBRE EMPRESA').toString().toUpperCase();
+                var metaNode = document.getElementById('company-meta');
+                if (metaNode) {
+                    var parts = [];
+                    if (comp.rnc) parts.push('RNC: ' + escapeHtml(comp.rnc));
+                    if (comp.address_line1) parts.push(escapeHtml(comp.address_line1));
+                    if (comp.address_line2) parts.push(escapeHtml(comp.address_line2));
+                    if (comp.phone) parts.push('Tel: ' + escapeHtml(comp.phone));
+                    if (comp.email) parts.push('Email: ' + escapeHtml(comp.email));
+                    metaNode.innerHTML = parts.join('<br/>');
+                }
+                var logoNode = document.getElementById('company-logo');
+                var tpl = window.TEMPLATE || {};
+                var logoSrc = comp.logo_path || tpl.logo_path || '';
+                if (logoNode && logoSrc) {
+                    try {
+                        var img = document.createElement('img'); img.src = logoSrc; img.alt = comp.name || 'logo';
+                        img.style.maxWidth = '100%'; img.style.maxHeight = '100%';
+                        logoNode.innerHTML = ''; logoNode.appendChild(img);
+                    } catch (e){}
+                }
+            } catch (e) { console.warn('renderHeader error', e); }
+        }
+
+        function renderMeta() {
+            try {
+                var q = window.INVOICE || {};
+                var qtype = document.getElementById('invoice-type');
+                if (qtype) qtype.textContent = (q.type || 'FACTURA').toString().toUpperCase();
+                var qnum = document.getElementById('invoice-number');
+                if (qnum) qnum.textContent = q.number || 'N/A';
+                var ncf = document.getElementById('invoice-ncf');
+                if (ncf) ncf.textContent = q.ncf || 'N/A';
+                var qdate = document.getElementById('invoice-date');
+                if (qdate) qdate.textContent = formatDate(q.date || q.invoice_date || q.created_at);
+            } catch (e) { console.warn('renderMeta error', e); }
+        }
+
+        function renderClient() {
+            try {
+                var q = window.INVOICE || {};
+                var cn = document.getElementById('client-name');
+                if (cn) cn.textContent = q.client_name || '';
+                var cr = document.getElementById('client-rnc');
+                if (cr) cr.textContent = q.client_rnc || 'N/A';
+            } catch (e) { console.warn('renderClient error', e); }
+        }
+
+        function renderItemsAndTotals() {
+            try {
+                var q = window.INVOICE || {};
+                var items = q.items || [];
+                var tbody = document.getElementById('items-table-body');
+                if (!tbody) return;
+                var html = '';
+                var subtotal = 0;
+                items.forEach(function(it){
+                    var qty = Number(it.quantity)||0;
+                    var up = Number(it.unit_price)||0;
+                    var line = qty * up;
+                    subtotal += line;
+                    html += '<tr>';
+                    html += '<td class="qty" style="text-align:center;">' + escapeHtml(qty) + '</td>';
+                    html += '<td><div class="code">' + escapeHtml(it.code||'') + '</div><div class="desc">' + escapeHtml(it.description||'') + '</div></td>';
+                    html += '<td class="unit" style="text-align:center;">' + escapeHtml(it.unit||'Unid.') + '</td>';
+                    html += '<td class="right" style="text-align:right;">' + formatCurrency(up) + '</td>';
+                    html += '<td class="right" style="text-align:right;">' + formatCurrency(line) + '</td>';
+                    html += '</tr>';
+                });
+                tbody.innerHTML = html;
+                var itbis_rate = Number((window.TEMPLATE && window.TEMPLATE.itbis_rate) || 0.18);
+                var itbisAmount = subtotal * itbis_rate;
+                var total = subtotal + itbisAmount;
+                if (document.getElementById('subtotal')) document.getElementById('subtotal').textContent = formatCurrency(subtotal);
+                if (document.getElementById('itbis')) document.getElementById('itbis').textContent = formatCurrency(itbisAmount);
+                if (document.getElementById('total')) document.getElementById('total').textContent = formatCurrency(total);
+                var itbisRateNode = document.getElementById('itbis-rate');
+                if (itbisRateNode) itbisRateNode.textContent = (itbis_rate*100).toFixed(0)+'%';
+            } catch (e) { console.warn('renderItemsAndTotals error', e); }
+        }
+
+        function renderFooter() {
+            try {
+                var footerNode = document.getElementById('footer-lines');
+                if (!footerNode) return;
+                footerNode.innerHTML = '';
+                var flines = (window.TEMPLATE && window.TEMPLATE.footer_lines) || [];
+                flines.forEach(function(line){
+                    var p = document.createElement('p'); p.className='text-xs muted'; p.textContent=line; footerNode.appendChild(p);
+                });
+                var sig = (window.TEMPLATE && window.TEMPLATE.signature_name) || '';
+                if (document.getElementById('authorized-signature-name')) document.getElementById('authorized-signature-name').textContent = sig.toString().toUpperCase();
+            } catch (e) { console.warn('renderFooter error', e); }
+        }
+
+        function renderAll() {
+            setColorVariables();
+            renderHeader();
+            renderMeta();
+            renderClient();
+            renderItemsAndTotals();
+            renderFooter();
+        }
+
+        window.onload = function () {
+            try { readInjectedJSON(); } catch (e) { console.warn(e); }
+            try { renderAll(); } catch (e) { console.error('Render error', e); }
+        };
+    </script>
+</head>
+<body>
+  <script id="invoice-data" type="application/json">{"COMPANY": {"id": 1, "name": "Barnhouse Services Srl", "rnc": "1-32-04275-1", "address_line1": "", "address_line2": "", "phone": "", "email": "", "logo_path": "file:///E:/Dropbox/PROGAIN/FACOT/data/company_1/logo.png"}, "TEMPLATE": {"show_logo": true, "logo_path": "company_1/logo.png", "header_lines": ["", "", ""], "footer_lines": [], "primary_color": "#555502", "font_name": "Arial", "font_size": 10, "logo_width_px": 180, "layout": "default", "itbis_rate": 0.18}, "QUOTATION": {"company_id": 1, "number": "INV-1-20251017-114200", "ncf": "B0100000150", "date": "2025-10-17", "client_name": "FIRST POT SHABU SHABU SRL", "client_rnc": "131887651", "items": [{"code": "ELE004", "description": "REDUCCION DE 25*20 PPR", "unit": "UND", "quantity": 100.0, "unit_price": 25.0}, {"code": "ELE006", "description": "COUPLIN DE 25 PPR", "unit": "UND", "quantity": 200.0, "unit_price": 35.0}, {"code": "ELE016", "description": "ALAMBRE THHN NO.4 BLANCO", "unit": "M", "quantity": 500.0, "unit_price": 75.0}], "notes": ""}}</script>
+
+    <div class="print-area" id="invoice-document">
+        <div class="content">
+            <div class="header-top">
+                <div class="company-header">
+                    <div id="company-logo" class="company-logo">LOGO</div>
+                    <div>
+                        <div id="company-name" class="company-name">NOMBRE EMPRESA</div>
+                        <div id="company-meta" class="company-meta">RNC: ...</div>
+                    </div>
+                </div>
+
+                <div class="right-meta">
+                    <div id="invoice-type" class="invoice-type">FACTURA</div>
+                    <div class="mt-2"><span class="invoice-label">FACTURA N°:</span> <span id="invoice-number" class="invoice-value">N/A</span></div>
+                    <div><span class="invoice-label">NCF:</span> <span id="invoice-ncf" class="invoice-value">N/A</span></div>
+                    <div id="invoice-date" class="invoice-date">FECHA: --/--/----</div>
+                </div>
+            </div>
+
+            <div class="client-box">
+                <div class="client-info-item">
+                    <div class="client-label">Facturado A</div>
+                    <div id="client-name" class="client-name">Cliente</div>
+                </div>
+                <div class="client-info-item">
+                    <div class="client-label">RNC Cliente</div>
+                    <div id="client-rnc" class="client-name">N/A</div>
+                </div>
+            </div>
+
+            <div class="items-wrap">
+                <h3 style="color:var(--primary); margin-bottom:14px; font-weight:700; font-size:1.05rem; text-transform:uppercase;">Detalle de Servicios / Productos</h3>
+                <div class="rounded-lg overflow-hidden">
+                    <table class="items-table">
+                        <thead>
+                            <tr>
+                                <th style="width:8%; text-align:center">Cant.</th>
+                                <th>Código / Descripción</th>
+                                <th style="width:10%; text-align:center">Unidad</th>
+                                <th style="width:15%; text-align:right">Precio Unit. (RD$)</th>
+                                <th style="width:15%; text-align:right">IMPORTE (RD$)</th>
+                            </tr>
+                        </thead>
+                        <tbody id="items-table-body" class="bg-white"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="totals">
+                <div class="totals-box">
+                    <div class="totals-row"><div>SUBTOTAL (SIN ITBIS) RD$:</div><div id="subtotal">0.00</div></div>
+                    <div class="totals-row"><div>ITBIS (<span id="itbis-rate">18%</span>) RD$:</div><div id="itbis">0.00</div></div>
+                    <div class="totals-row total"><div>TOTAL A PAGAR RD$:</div><div id="total">0.00</div></div>
+                </div>
+            </div>
+
+            <div id="footer-lines" class="footer-conditions"></div>
+
+            <div class="signature-area">
+                <div class="signature-block">
+                    <span class="signature-line"></span>
+                    <div id="authorized-signature-name" style="font-weight:700; color:#1f2937;">NOMBRE FIRMA AUTORIZADA</div>
+                    <div class="signature-label">Firma Autorizada de la Empresa</div>
+                </div>
+
+                <div class="signature-block">
+                    <span class="signature-line"></span>
+                    <div style="height:18px;"></div>
+                    <div class="signature-label">Aceptado y Recibido Por el Cliente</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

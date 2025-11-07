@@ -1,0 +1,189 @@
+from __future__ import annotations
+import os
+from typing import Dict, Any
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog, QMessageBox, QSizePolicy
+from PyQt6.QtCore import QUrl, QTimer, QByteArray
+from PyQt6.QtWebEngineWidgets import QWebEngineView
+
+from utils.html_injector import build_html_with_json_block
+
+class QuotationPreviewDialog(QDialog):
+    """
+    Diálogo para mostrar la vista previa HTML de la cotización y exportar a PDF.
+    Reutilizable para InvoiceTab también.
+    """
+    def __init__(self, company: Dict[str, Any], template: Dict[str, Any], quotation: Dict[str, Any],
+                 template_path: str = "templates/quotation_template.html", parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Vista previa - Cotización")
+        self.resize(1000, 800)
+        self.company = company or {}
+        self.template = template or {}
+        self.quotation = quotation or {}
+        self.template_path = template_path
+
+        self._build_ui()
+        self._load_html()
+
+    def _build_ui(self):
+        v = QVBoxLayout(self)
+        self.view = QWebEngineView(self)
+        self.view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        v.addWidget(self.view)
+
+        row = QHBoxLayout()
+        self.btn_export_pdf = QPushButton("Exportar a PDF")
+        self.btn_print = QPushButton("Imprimir (dialog)")
+        self.btn_close = QPushButton("Cerrar")
+        row.addStretch(1)
+        row.addWidget(self.btn_export_pdf)
+        row.addWidget(self.btn_print)
+        row.addWidget(self.btn_close)
+        v.addLayout(row)
+
+        self.btn_export_pdf.clicked.connect(self._on_export_pdf)
+        self.btn_print.clicked.connect(self._on_print_dialog)
+        self.btn_close.clicked.connect(self.reject)
+
+    def _load_html(self):
+        try:
+            html = build_html_with_json_block(self.template_path, self.company, self.template, self.quotation)
+            base = QUrl.fromLocalFile(os.path.abspath(os.path.dirname(self.template_path)))
+            self.view.setHtml(html, base)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"No se pudo cargar la vista previa:\n{e}")
+
+    def _on_export_pdf(self):
+        """
+        Exporta la vista actual a PDF de forma robusta:
+        - espera document.readyState == 'complete' antes de exportar
+        - acepta bytes, bytearray, Qt QByteArray y boolean/None behaviors
+        - escribe el archivo cuando recibe bytes/QByteArray
+        """
+        fn, _ = QFileDialog.getSaveFileName(self, "Guardar Cotización como PDF", f"cotizacion_{self.quotation.get('number','')}.pdf", "PDF Files (*.pdf)")
+        if not fn:
+            return
+        save_path = fn if fn.lower().endswith(".pdf") else fn + ".pdf"
+
+        self.btn_export_pdf.setEnabled(False)
+
+        def finish_with_message(ok: bool, msg: str = None):
+            self.btn_export_pdf.setEnabled(True)
+            if ok:
+                QMessageBox.information(self, "PDF", f"PDF generado:\n{save_path}")
+            else:
+                QMessageBox.warning(self, "PDF", msg or "No se pudo generar el PDF o está vacío.")
+
+        # callback handler that tolerates bytes, bytearray, QByteArray and boolean/None results
+        def on_pdf_result(result):
+            try:
+                # QByteArray (PyQt6) -> convert to bytes
+                if isinstance(result, QByteArray):
+                    ba = bytes(result)  # QByteArray -> bytes
+                    try:
+                        with open(save_path, "wb") as f:
+                            f.write(ba)
+                        print(f"[QuotationPreviewDialog] Received QByteArray, wrote {len(ba)} bytes to {save_path}")
+                        finish_with_message(True)
+                        return
+                    except Exception as e:
+                        print("[QuotationPreviewDialog] Error writing QByteArray to file:", e)
+                        finish_with_message(False, f"No se pudo escribir el PDF: {e}")
+                        return
+
+                # Case: bytes / bytearray -> write file
+                if isinstance(result, (bytes, bytearray)):
+                    try:
+                        with open(save_path, "wb") as f:
+                            f.write(result)
+                        print(f"[QuotationPreviewDialog] Wrote PDF bytes to {save_path} (len={len(result)})")
+                        finish_with_message(True)
+                        return
+                    except Exception as e:
+                        print("[QuotationPreviewDialog] Error writing PDF bytes:", e)
+                        finish_with_message(False, f"No se pudo escribir el PDF: {e}")
+                        return
+
+                # Case: some Qt versions call callback after writing file and pass True/None
+                if isinstance(result, bool) or result is None:
+                    if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
+                        print(f"[QuotationPreviewDialog] printToPdf wrote file at {save_path}")
+                        finish_with_message(True)
+                        return
+                    # fallback: try requesting bytes variant and write manually
+                    try:
+                        def cb_bytes(data):
+                            try:
+                                # handle QByteArray here too
+                                if isinstance(data, QByteArray):
+                                    data_bytes = bytes(data)
+                                else:
+                                    data_bytes = data
+                                if isinstance(data_bytes, (bytes, bytearray)):
+                                    with open(save_path, "wb") as f:
+                                        f.write(data_bytes)
+                                    print(f"[QuotationPreviewDialog] Fallback wrote PDF bytes to {save_path} (len={len(data_bytes)})")
+                                    finish_with_message(True)
+                                else:
+                                    finish_with_message(False, "Fallback: printToPdf no retornó bytes.")
+                            except Exception as ex:
+                                finish_with_message(False, f"Error al escribir fallback PDF: {ex}")
+                        # Try bytes-overload
+                        print("[QuotationPreviewDialog] Trying fallback printToPdf(callback->bytes)")
+                        self.view.page().printToPdf(cb_bytes)
+                        return
+                    except Exception as e:
+                        print("[QuotationPreviewDialog] Fallback printToPdf failed:", e)
+                        finish_with_message(False, f"No se pudo generar el PDF: {e}")
+                        return
+
+                # Unknown result type
+                print("[QuotationPreviewDialog] printToPdf returned unknown result type:", type(result))
+                finish_with_message(False, "Resultado inesperado al generar PDF.")
+            finally:
+                self.btn_export_pdf.setEnabled(True)
+
+        # Ensure the page finished loading and rendered resources
+        def proceed_print():
+            try:
+                # First try to call the variant that returns bytes (callback receives bytes/QByteArray)
+                try:
+                    print("[QuotationPreviewDialog] Calling printToPdf(callback->bytes)")
+                    self.view.page().printToPdf(on_pdf_result)
+                except TypeError:
+                    # If API signature expects (filepath, callback), call that
+                    try:
+                        print("[QuotationPreviewDialog] Calling printToPdf(filepath, callback)")
+                        self.view.page().printToPdf(save_path, on_pdf_result)
+                    except Exception as ex:
+                        print("[QuotationPreviewDialog] printToPdf(filepath,callback) failed:", ex)
+                        finish_with_message(False, f"printToPdf no disponible: {ex}")
+            except Exception as e:
+                print("[QuotationPreviewDialog] Exception while printing:", e)
+                finish_with_message(False, f"Error al generar PDF: {e}")
+
+        # Ask page.readyState first, then proceed (gives better chance fonts/images are loaded)
+        try:
+            def on_ready_state(state):
+                try:
+                    if isinstance(state, str) and state.lower() == "complete":
+                        QTimer.singleShot(150, proceed_print)
+                    else:
+                        QTimer.singleShot(350, proceed_print)
+                except Exception as e:
+                    print("[QuotationPreviewDialog] on_ready_state error:", e)
+                    proceed_print()
+            self.view.page().runJavaScript("document.readyState", on_ready_state)
+        except Exception:
+            QTimer.singleShot(150, proceed_print)
+
+    def _on_print_dialog(self):
+        try:
+            def cb(_):
+                QMessageBox.information(self, "Imprimir", "Se generó PDF temporal para imprimir.")
+            try:
+                self.view.page().printToPdf(cb)
+            except TypeError:
+                self.view.page().printToPdf("temp_print.pdf", cb)
+        except Exception as e:
+            QMessageBox.critical(self, "Imprimir", f"No se pudo iniciar la impresión:\n{e}")

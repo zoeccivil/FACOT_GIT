@@ -1,0 +1,221 @@
+from __future__ import annotations
+
+from PyQt6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QLabel, QComboBox, QMessageBox,
+    QMenuBar, QMenu, QFileDialog
+)
+from PyQt6.QtGui import QAction
+import os, sys
+
+import facot_config
+from logic import LogicController
+
+# Tabs modulares
+from tabs.invoice_tab import InvoiceTab
+import sys
+# Fuerza recarga de módulos
+if 'tabs.quotation_tab' in sys.modules:
+    del sys.modules['tabs.quotation_tab']
+from tabs.quotation_tab import QuotationTab
+from tabs.invoice_history_tab import InvoiceHistoryTab
+from tabs.quotation_history_tab import QuotationHistoryTab
+
+# Ventanas secundarias
+from settings_window import SettingsWindow
+from company_management_window import CompanyManagementWindow
+from items_management_window import ItemsManagementWindow
+
+# Dialog para editar plantillas (botón/menú)
+from dialogs.template_editor_dialog import TemplateEditorDialog
+
+# -*- coding: utf-8 -*-
+
+
+# ahora las importaciones normales
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QTextEdit, QPushButton,
+    QDateEdit, QTableWidget, QTableWidgetItem, QFileDialog, QMessageBox, QComboBox,
+    QHeaderView, QGroupBox, QToolButton, QCheckBox
+)
+from PyQt6.QtCore import QDate, Qt, pyqtSignal
+# ... el resto de imports ...
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Gestión de Facturas y Cotizaciones")
+        self.resize(1100, 790)
+        self._init_db()
+        self._setup_ui()
+        self._setup_menu()
+
+    def _init_db(self):
+        db_path = facot_config.get_db_path()
+        if not db_path or not os.path.isfile(db_path):
+            filename, _ = QFileDialog.getOpenFileName(self, "Selecciona tu archivo de base de datos", "", "Database Files (*.db);;Todos los archivos (*)")
+            if filename:
+                facot_config.set_db_path(filename); db_path = filename
+            else:
+                QMessageBox.critical(self, "Error", "No se seleccionó una base de datos. El programa se cerrará.")
+                sys.exit(1)
+        self.logic = LogicController(db_path)
+
+    def _setup_ui(self):
+        central = QWidget(); layout = QVBoxLayout(central); self.setCentralWidget(central)
+
+        # Selector de empresa
+        self.company_selector = QComboBox()
+        layout.addWidget(QLabel("Empresa:")); layout.addWidget(self.company_selector)
+        self._populate_companies()
+        self.company_selector.currentIndexChanged.connect(self._on_company_change)
+
+        # Función para obtener la empresa actual (las pestañas usan get_current_company inyectado)
+        get_company = lambda: self.companies.get(self.company_selector.currentText())
+
+        # Tabs modulares
+        from PyQt6.QtWidgets import QTabWidget
+        self.tabs = QTabWidget()
+
+        self.invoice_tab = InvoiceTab(self.logic, get_company)
+        self.quotation_tab = QuotationTab(self.logic, get_company)
+        self.invoice_history_tab = InvoiceHistoryTab(self.logic, get_company)
+        self.quotation_history_tab = QuotationHistoryTab(self.logic, get_company)
+
+        # Conexiones: refrescar historial al guardar
+        self.invoice_tab.invoice_saved.connect(lambda _id: self.invoice_history_tab.refresh())
+        self.quotation_tab.quotation_saved.connect(lambda _id: self.quotation_history_tab.refresh())
+
+        self.tabs.addTab(self.invoice_tab, "Factura")
+        self.tabs.addTab(self.quotation_tab, "Cotización")
+        self.tabs.addTab(self.invoice_history_tab, "Historial de Facturas")
+        self.tabs.addTab(self.quotation_history_tab, "Historial de Cotizaciones")
+        layout.addWidget(self.tabs)
+
+    def _setup_menu(self):
+        menu_bar = QMenuBar(self); self.setMenuBar(menu_bar)
+        archivo_menu = QMenu("&Archivo", self); menu_bar.addMenu(archivo_menu)
+
+        abrir_base_action = QAction("Abrir Base de Datos...", self)
+        abrir_base_action.triggered.connect(self._abrir_base_de_datos)
+        archivo_menu.addAction(abrir_base_action)
+
+        crear_base_action = QAction("Crear Nueva Base de Datos...", self)
+        crear_base_action.triggered.connect(self._crear_nueva_base_de_datos)
+        archivo_menu.addAction(crear_base_action)
+
+        backup_action = QAction("Hacer Backup...", self)
+        backup_action.triggered.connect(self._hacer_backup)
+        archivo_menu.addAction(backup_action)
+
+        archivo_menu.addSeparator()
+        salir_action = QAction("Salir", self); salir_action.triggered.connect(self.close)
+        archivo_menu.addAction(salir_action)
+
+        # Menú Reportes (placeholders)
+        reportes_menu = QMenu("&Reportes", self); menu_bar.addMenu(reportes_menu)
+        reporte_ventas_action = QAction("Reporte de Ventas", self)
+        reporte_ventas_action.triggered.connect(lambda: QMessageBox.information(self, "Reporte", "Aquí se abriría el reporte de ventas."))
+        reportes_menu.addAction(reporte_ventas_action)
+        reporte_clientes_action = QAction("Reporte por Cliente", self)
+        reporte_clientes_action.triggered.connect(lambda: QMessageBox.information(self, "Reporte", "Aquí se abriría el reporte por cliente."))
+        reportes_menu.addAction(reporte_clientes_action)
+
+        # Menú Opciones
+        opciones_menu = QMenu("&Opciones", self); menu_bar.addMenu(opciones_menu)
+        config_rutas_action = QAction("Configurar Rutas...", self)
+        config_rutas_action.triggered.connect(self._abrir_configuracion)
+        opciones_menu.addAction(config_rutas_action)
+
+        gestionar_empresas_action = QAction("Gestionar Empresas...", self)
+        gestionar_empresas_action.triggered.connect(self._abrir_gestion_empresas)
+        opciones_menu.addAction(gestionar_empresas_action)
+
+        gestion_items_action = QAction("Gestionar Ítems...", self)
+        gestion_items_action.triggered.connect(self._abrir_gestion_items)
+        opciones_menu.addAction(gestion_items_action)
+
+        # Acción: Editar plantilla (abre el editor de plantillas para la empresa seleccionada)
+        action_edit_template = QAction("Editar plantilla...", self)
+        action_edit_template.setStatusTip("Editar plantilla para la empresa seleccionada")
+        action_edit_template.triggered.connect(self._menu_edit_template)
+        opciones_menu.addAction(action_edit_template)
+
+    # --------- Menu handlers ----------
+    def _abrir_base_de_datos(self):
+        filename, _ = QFileDialog.getOpenFileName(self, "Abrir Base de Datos", "", "Database Files (*.db);;Todos los archivos (*)")
+        if filename:
+            facot_config.set_db_path(filename)
+            self.logic = LogicController(filename)
+            self._populate_companies()
+            # Reinyectar lógica en tabs
+            get_company = lambda: self.companies.get(self.company_selector.currentText())
+            self.invoice_tab.logic = self.logic; self.quotation_tab.logic = self.logic
+            self.invoice_history_tab.logic = self.logic; self.quotation_history_tab.logic = self.logic
+            self._on_company_change()
+            QMessageBox.information(self, "Base de Datos", "Base de datos abierta correctamente.")
+
+    def _crear_nueva_base_de_datos(self):
+        filename, _ = QFileDialog.getSaveFileName(self, "Crear Nueva Base de Datos", "", "Database Files (*.db);;Todos los archivos (*)")
+        if filename:
+            facot_config.set_db_path(filename)
+            self.logic = LogicController(filename)
+            self._populate_companies()
+            self._on_company_change()
+            QMessageBox.information(self, "Base de Datos", "Nueva base de datos creada correctamente.")
+
+    def _hacer_backup(self):
+        import shutil
+        db_path = self.logic.db_path
+        backup_path, _ = QFileDialog.getSaveFileName(self, "Guardar Backup de la Base de Datos", "", "Database Files (*.db);;Todos los archivos (*)")
+        if backup_path:
+            shutil.copy2(db_path, backup_path)
+            QMessageBox.information(self, "Backup", f"Backup guardado en:\n{backup_path}")
+
+    def _abrir_configuracion(self):
+        dlg = SettingsWindow(self.logic, self); dlg.exec()
+
+    def _abrir_gestion_empresas(self):
+        dlg = CompanyManagementWindow(self, self.logic); dlg.exec()
+        # Si cambian empresas, repoblar
+        self._populate_companies()
+        self._on_company_change()
+
+    def _abrir_gestion_items(self):
+        dlg = ItemsManagementWindow(self); dlg.exec()
+
+    # --------- Empresas ----------
+    def _populate_companies(self):
+        self.company_selector.clear()
+        companies = self.logic.get_all_companies()
+        self.companies = {str(c['name']): c for c in companies}
+        self.company_selector.addItems(self.companies.keys())
+
+    def _on_company_change(self):
+        # Notifica a las pestañas
+        self.invoice_tab.on_company_change()
+        self.quotation_tab.on_company_change()
+        self.invoice_history_tab.refresh()
+        self.quotation_history_tab.refresh()
+
+    # Helper para obtener la empresa actual desde cualquier lugar
+    def get_current_company(self):
+        return self.companies.get(self.company_selector.currentText())
+
+    # Menú: abrir editor de plantillas para la empresa seleccionada
+    def _menu_edit_template(self):
+        company = self.get_current_company()
+        if not company:
+            QMessageBox.warning(self, "Plantilla", "Seleccione primero una empresa válida.")
+            return
+
+        company_id = company.get("id") or company.get("company_id") or company.get("pk")
+        if not company_id:
+            QMessageBox.warning(self, "Plantilla", "La empresa seleccionada no tiene identificador.")
+            return
+
+        try:
+            dlg = TemplateEditorDialog(company_id=company_id, parent=self)
+            if dlg.exec():
+                QMessageBox.information(self, "Plantilla", "Plantilla guardada correctamente.")
+        except Exception as e:
+            QMessageBox.critical(self, "Plantilla", f"No se pudo abrir el editor de plantillas:\n{e}")
