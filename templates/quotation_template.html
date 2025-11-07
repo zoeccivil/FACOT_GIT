@@ -374,10 +374,7 @@
       try {
         var p = (window.TEMPLATE && window.TEMPLATE.primary_color) || (window.COMPANY && window.COMPANY.primary_color) || '#0087C3';
         document.documentElement.style.setProperty('--primary', p);
-        var sheet = document.styleSheets && document.styleSheets[0];
-        if (sheet && sheet.insertRule) {
-          sheet.insertRule('table thead th { background: ' + p + ' !important; }', sheet.cssRules.length);
-        }
+        // Removed insertRule to avoid DOMException - CSS variables handle this automatically
       } catch (e) {
         console.warn('setColorVariables error', e);
       }
