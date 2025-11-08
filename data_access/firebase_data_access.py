@@ -357,6 +357,9 @@ class FirebaseDataAccess(DataAccess):
     def get_next_ncf(self, company_id: int, ncf_type: str) -> str:
         """Obtiene el siguiente NCF disponible para una empresa y tipo."""
         try:
+            # Importar firestore ANTES de usarlo en el decorador
+            from google.cloud import firestore
+            
             # Usar transacción para asegurar atomicidad
             sequence_ref = self.db.collection('sequences').document(f"{company_id}_ncf_{ncf_type}")
             
@@ -374,7 +377,6 @@ class FirebaseDataAccess(DataAccess):
                 
                 return new_value
             
-            from google.cloud import firestore
             transaction = self.db.transaction()
             seq_num = increment_sequence(transaction)
             
