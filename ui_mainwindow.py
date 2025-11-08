@@ -404,7 +404,15 @@ class MainWindow(QMainWindow):
         
         # Hacer request a un servidor confiable
         request = QNetworkRequest(QUrl("https://www.google.com"))
-        request.setTransferTimeout(3000)  # 3 segundos timeout
+        # PyQt 6.5+ expose setTransferTimeout; en builds anteriores no existe.
+        if hasattr(request, "setTransferTimeout"):
+            request.setTransferTimeout(3000)  # 3 segundos timeout
+        else:  # pragma: no cover - fallback para compatibilidad
+            try:
+                # Para versiones viejas, usar atributo dinámico que respeta la API.
+                request.transferTimeout = 3000
+            except Exception:
+                pass
         self.network_manager.get(request)
     
     def _on_network_check_finished(self, reply):
