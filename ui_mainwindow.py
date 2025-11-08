@@ -68,13 +68,26 @@ class MainWindow(QMainWindow):
                 sys.exit(1)
         self.logic = LogicController(db_path)
         
-        # Initialize data_access with SQLite by default
+        # Initialize data_access with preferred mode from config
         try:
             from data_access import get_data_access, DataAccessMode
-            self.data_access = get_data_access(logic_controller=self.logic, mode=DataAccessMode.SQLITE)
+            from config_facot import get_connection_mode
+            
+            # Cargar modo preferido de configuración
+            preferred_mode = get_connection_mode()  # "SQLITE", "FIREBASE", or "AUTO"
+            print(f"[MAIN] Modo de conexión preferido: {preferred_mode}")
+            
+            # Convertir a DataAccessMode enum
+            mode_enum = DataAccessMode[preferred_mode]
+            
+            # Inicializar data_access con el modo preferido
+            self.data_access = get_data_access(logic_controller=self.logic, mode=mode_enum)
+            self.current_access_mode = preferred_mode
+            
         except Exception as e:
             print(f"[MAIN] Warning: Could not initialize data_access: {e}")
             self.data_access = None
+            self.current_access_mode = "SQLITE"
 
     def _setup_ui(self):
         central = QWidget(); layout = QVBoxLayout(central); self.setCentralWidget(central)

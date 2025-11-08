@@ -164,6 +164,12 @@ class ConnectionStatusBar(QWidget):
         """Muestra el menú de opciones."""
         menu = QMenu(self)
         
+        # NUEVA OPCIÓN: Configurar modo
+        config_action = menu.addAction("⚙️ Configurar modo...")
+        config_action.triggered.connect(self._show_mode_config_dialog)
+        
+        menu.addSeparator()
+        
         # Opciones según el modo actual
         if self.current_mode == "SQLITE":
             # Cambiar base de datos
@@ -204,6 +210,18 @@ class ConnectionStatusBar(QWidget):
         
         # Mostrar menú en la posición del cursor
         menu.exec(QCursor.pos())
+    
+    def _show_mode_config_dialog(self):
+        """Muestra el diálogo de configuración de modo."""
+        from .connection_mode_dialog import show_connection_mode_dialog
+        
+        # Mostrar diálogo con modo actual
+        new_mode = show_connection_mode_dialog(self.current_mode, self)
+        
+        if new_mode:
+            # Usuario seleccionó un nuevo modo
+            print(f"[CONNECTION_STATUS] Cambiando a modo: {new_mode}")
+            self._change_mode(new_mode)
     
     def _change_database(self):
         """Permite al usuario cambiar la base de datos SQLite."""
