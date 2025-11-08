@@ -222,6 +222,14 @@ class MainWindow(QMainWindow):
         reporte_clientes_action.triggered.connect(lambda: QMessageBox.information(self, "Reporte", "Aquí se abriría el reporte por cliente."))
         reportes_menu.addAction(reporte_clientes_action)
 
+        # Menú Herramientas
+        herramientas_menu = QMenu("&Herramientas", self); menu_bar.addMenu(herramientas_menu)
+        migrar_firebase_action = QAction("🔄 Migrar a Firebase...", self)
+        migrar_firebase_action.setShortcut("Ctrl+Shift+M")
+        migrar_firebase_action.setToolTip("Migrar datos de SQLite a Firebase")
+        migrar_firebase_action.triggered.connect(self._abrir_dialogo_migracion)
+        herramientas_menu.addAction(migrar_firebase_action)
+
         # Menú Opciones
         opciones_menu = QMenu("&Opciones", self); menu_bar.addMenu(opciones_menu)
         config_rutas_action = QAction("Configurar Rutas...", self)
@@ -284,6 +292,13 @@ class MainWindow(QMainWindow):
 
     def _abrir_gestion_items(self):
         dlg = ItemsManagementWindow(self); dlg.exec()
+
+    def _abrir_dialogo_migracion(self):
+        """Abre el diálogo de migración SQLite → Firebase"""
+        from dialogs.migration_dialog import MigrationDialog
+        
+        dialog = MigrationDialog(self)
+        dialog.exec()
 
     # --------- Empresas ----------
     def _populate_companies(self):
