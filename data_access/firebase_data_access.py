@@ -6,11 +6,16 @@ con soporte para multi-usuario y company_id scoping.
 """
 
 from __future__ import annotations
+import re
 from typing import List, Dict, Any, Optional
-from datetime import datetime
+from datetime import datetime, date
 
 from .base import DataAccess
 from firebase import get_firebase_client
+from constants import NCF_CATEGORY_DEFAULT_PREFIX
+
+NCF_REGEX_STD = re.compile(r'^(?!E)[A-Z][0-9]{10}$')
+NCF_REGEX_E = re.compile(r'^E[0-9]{13}$')
 
 
 class FirebaseDataAccess(DataAccess):
@@ -44,15 +49,173 @@ class FirebaseDataAccess(DataAccess):
     def _add_metadata(self, data: Dict[str, Any], is_update: bool = False) -> Dict[str, Any]:
         """Agrega metadatos de auditoría a un documento."""
         now = datetime.utcnow().isoformat()
-        
+
         if not is_update:
             data['created_at'] = now
             data['created_by'] = self.user_id
-        
+
         data['updated_at'] = now
         data['updated_by'] = self.user_id
-        
+
         return data
+
+    # ------------------------------------------------------------------
+    # Helpers NCF
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _pad_len_for_prefix(prefix: str) -> int:
+        return 11 if (prefix or "").upper().startswith("E") else 8
+
+    def _format_ncf(self, prefix: str, seq: int) -> str:
+        if not prefix or seq <= 0:
+            return ""
+        pad = self._pad_len_for_prefix(prefix)
+        return f"{prefix.upper()}{seq:0{pad}d}"
+
+    @staticmethod
+    def _normalize_iso_date(value: Optional[str]) -> str:
+        if not value:
+            return "1900-01-01"
+        try:
+            return date.fromisoformat(value[:10]).isoformat()
+        except Exception:
+            return "1900-01-01"
+
+    @staticmethod
+    def _sequence_from_ncf(ncf: Optional[str]) -> Optional[int]:
+        s = (ncf or "").strip().upper()
+        if len(s) < 4 or not s[3:].isdigit():
+            return None
+        try:
+            return int(s[3:])
+        except Exception:
+            return None
+
+    @staticmethod
+    def _validate_ncf(ncf: str) -> bool:
+        value = (ncf or "").strip().upper()
+        return bool(NCF_REGEX_STD.match(value) or NCF_REGEX_E.match(value))
+
+    @staticmethod
+    def _split_ncf(ncf: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+        value = (ncf or "").strip().upper()
+        if NCF_REGEX_E.match(value):
+            return "E", value[1:3], value[3:]
+        if NCF_REGEX_STD.match(value):
+            return value[0], value[1:3], value[3:]
+        return None, None, None
+
+    def _fetch_sequence_configs(self, company_id: int) -> List[Dict[str, Any]]:
+        configs: List[Dict[str, Any]] = []
+        try:
+            query = (
+                self.db.collection('ncf_sequence_configs')
+                .where('company_id', '==', int(company_id))
+            )
+            for doc in query.stream():
+                data = doc.to_dict() or {}
+                data['id'] = doc.id
+                configs.append(self._enrich_config(data))
+        except Exception as exc:
+            print(f"[FIREBASE] Error fetching NCF sequence configs: {exc}")
+            return []
+
+        configs.sort(
+            key=lambda item: (
+                str(item.get('category') or ''),
+                str(item.get('effective_from') or ''),
+                str(item.get('id') or ''),
+            )
+        )
+        return configs
+
+    def _enrich_config(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        prefix = (data.get('prefix') or '').upper()
+        next_seq = int(data.get('next_sequence') or 1)
+        if next_seq <= 0:
+            next_seq = 1
+        last_assigned = (data.get('last_assigned') or '').upper()
+        if not last_assigned and next_seq > 1:
+            last_assigned = self._format_ncf(prefix, next_seq - 1)
+        enriched = dict(data)
+        enriched['prefix'] = prefix
+        enriched['next_sequence'] = next_seq
+        enriched['last_assigned'] = last_assigned
+        enriched['next_ncf'] = self._format_ncf(prefix, next_seq)
+        enriched['category'] = str(data.get('category') or '').upper()
+        enriched['effective_from'] = self._normalize_iso_date(data.get('effective_from'))
+        enriched['notes'] = data.get('notes') or ''
+        return enriched
+
+    def _choose_config(
+        self,
+        configs: List[Dict[str, Any]],
+        category: Optional[str],
+        prefix: Optional[str],
+        reference_date: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        if not configs:
+            return None
+        category_upper = (category or '').strip().upper() or None
+        prefix_upper = (prefix or '').strip().upper() or None
+        filtered = [cfg for cfg in configs if cfg]
+        if category_upper:
+            filtered = [cfg for cfg in filtered if cfg.get('category') == category_upper]
+        if prefix_upper and filtered:
+            filtered = [cfg for cfg in filtered if cfg.get('prefix') == prefix_upper] or filtered
+
+        if not filtered:
+            filtered = configs
+
+        ref = self._normalize_iso_date(reference_date)
+        active = None
+        future = None
+        for cfg in filtered:
+            eff = cfg.get('effective_from') or '1900-01-01'
+            if eff <= ref:
+                if (not active) or eff >= (active.get('effective_from') or '1900-01-01'):
+                    active = cfg
+            elif future is None:
+                future = cfg
+        return active or future or filtered[-1]
+
+    def _get_config_by_id(self, company_id: int, config_id: Any) -> Optional[Dict[str, Any]]:
+        try:
+            doc = (
+                self.db.collection('ncf_sequence_configs')
+                .document(str(config_id))
+                .get()
+            )
+            if not doc.exists:
+                return None
+            data = doc.to_dict() or {}
+            if int(data.get('company_id', company_id)) != int(company_id):
+                return None
+            data['id'] = doc.id
+            return self._enrich_config(data)
+        except Exception as exc:
+            print(f"[FIREBASE] Error reading NCF config {config_id}: {exc}")
+            return None
+
+    def _legacy_sequence_doc(self, company_id: int, prefix: str):
+        return self.db.collection('sequences').document(f"{company_id}_ncf_{prefix}")
+
+    def _get_next_ncf_legacy(self, company_id: int, prefix: str) -> str:
+        try:
+            sequence_ref = self._legacy_sequence_doc(company_id, prefix)
+            snapshot = sequence_ref.get()
+            current = snapshot.get('current') if snapshot.exists else 0
+            return self._format_ncf(prefix, int(current) + 1)
+        except Exception as exc:
+            print(f"[FIREBASE] Error leyendo secuencia legacy: {exc}")
+            return self._format_ncf(prefix, 1)
+
+    def _update_legacy_sequence(self, company_id: int, prefix: str, seq_value: int) -> None:
+        try:
+            sequence_ref = self._legacy_sequence_doc(company_id, prefix)
+            sequence_ref.set({'current': int(seq_value)}, merge=True)
+        except Exception as exc:
+            print(f"[FIREBASE] Error actualizando secuencia legacy: {exc}")
     
     # ===== EMPRESAS (COMPANIES) =====
     
@@ -353,41 +516,176 @@ class FirebaseDataAccess(DataAccess):
             return None
     
     # ===== NCF / SECUENCIAS =====
-    
-    def get_next_ncf(self, company_id: int, ncf_type: str) -> str:
+
+    def get_next_ncf(self, company_id: int, ncf_type: str, category: Optional[str] = None) -> str:
         """Obtiene el siguiente NCF disponible para una empresa y tipo."""
         try:
-            # Importar firestore ANTES de usarlo en el decorador
-            from google.cloud import firestore
-            
-            # Usar transacción para asegurar atomicidad
-            sequence_ref = self.db.collection('sequences').document(f"{company_id}_ncf_{ncf_type}")
-            
-            @firestore.transactional
-            def increment_sequence(transaction):
-                snapshot = sequence_ref.get(transaction=transaction)
-                
-                if snapshot.exists:
-                    current = snapshot.get('current')
-                else:
-                    current = 0
-                
-                new_value = current + 1
-                transaction.set(sequence_ref, {'current': new_value})
-                
-                return new_value
-            
-            transaction = self.db.transaction()
-            seq_num = increment_sequence(transaction)
-            
-            # Formatear NCF
-            return f"B{ncf_type}{seq_num:08d}"
+            prefix = (ncf_type or "B01").upper()
+            configs = self._fetch_sequence_configs(company_id)
+            reference_date = date.today().isoformat()
+            config = self._choose_config(configs, category, prefix, reference_date)
+            if config:
+                cfg_prefix = (config.get('prefix') or prefix).upper()
+                seq = int(config.get('next_sequence') or 1)
+                if seq <= 0:
+                    seq = 1
+                return self._format_ncf(cfg_prefix, seq)
+            return self._get_next_ncf_legacy(company_id, prefix)
         except Exception as e:
             print(f"[FIREBASE] Error getting next NCF: {e}")
-            return f"B{ncf_type}00000001"
-    
+            return self._format_ncf((ncf_type or 'B01').upper(), 1)
+
+    def mark_ncf_used(self, company_id: int, ncf: str) -> None:
+        letter, tipo2, seq_str = self._split_ncf(ncf)
+        if not letter or not tipo2 or not seq_str or not seq_str.isdigit():
+            raise ValueError("NCF inválido para registrar en Firebase")
+        prefix = f"{letter}{tipo2}".upper()
+        seq_val = int(seq_str)
+        configs = self._fetch_sequence_configs(company_id)
+        reference_date = date.today().isoformat()
+        config = self._choose_config(configs, None, prefix, reference_date)
+        ncf_upper = (ncf or "").strip().upper()
+
+        if config and config.get('id'):
+            new_next = max(seq_val + 1, int(config.get('next_sequence') or 1))
+            try:
+                self.db.collection('ncf_sequence_configs').document(str(config['id'])).update({
+                    'next_sequence': int(new_next),
+                    'last_assigned': ncf_upper,
+                    'updated_at': datetime.utcnow().isoformat(),
+                    'updated_by': self.user_id,
+                })
+            except Exception as exc:
+                print(f"[FIREBASE] Error actualizando secuencia NCF: {exc}")
+        else:
+            category = None
+            for cat, default_prefix in NCF_CATEGORY_DEFAULT_PREFIX.items():
+                if (default_prefix or '').upper() == prefix.upper():
+                    category = cat.upper()
+                    break
+            payload = {
+                'category': category or prefix,
+                'prefix': prefix,
+                'last_assigned': ncf_upper,
+                'next_sequence': seq_val + 1,
+                'effective_from': reference_date,
+            }
+            try:
+                self.save_ncf_sequence_config(company_id, payload)
+            except Exception as exc:
+                print(f"[FIREBASE] Error creando secuencia NCF: {exc}")
+
+        self._update_legacy_sequence(company_id, prefix, seq_val)
+
+    def reserve_ncf(self, company_id: int, ncf: str) -> None:
+        self.mark_ncf_used(company_id, ncf)
+
+    def list_ncf_sequence_configs(self, company_id: int) -> List[Dict[str, Any]]:
+        configs = self._fetch_sequence_configs(company_id)
+        reference_date = date.today().isoformat()
+        active_per_cat: Dict[str, tuple[str, str]] = {}
+        for cfg in configs:
+            cat = cfg.get('category', '')
+            eff = cfg.get('effective_from') or '1900-01-01'
+            cfg_id = str(cfg.get('id'))
+            if eff <= reference_date:
+                current = active_per_cat.get(cat)
+                if (not current) or eff >= current[1]:
+                    active_per_cat[cat] = (cfg_id, eff)
+        for cfg in configs:
+            cat = cfg.get('category', '')
+            cfg_id = str(cfg.get('id'))
+            active = active_per_cat.get(cat)
+            cfg['is_active'] = bool(active and active[0] == cfg_id)
+        return configs
+
+    def save_ncf_sequence_config(self, company_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        category = (data.get('category') or '').strip().upper()
+        if not category:
+            raise ValueError("Debe especificar la categoría del comprobante.")
+        prefix = (data.get('prefix') or '').strip().upper()
+        if len(prefix) != 3 or not prefix[0].isalpha() or not prefix[1:].isdigit():
+            raise ValueError("El prefijo debe tener formato LETRA + 2 dígitos (ej. B01, E31).")
+
+        effective_from = self._normalize_iso_date(data.get('effective_from'))
+        notes = (data.get('notes') or '').strip()
+
+        last_assigned = (data.get('last_assigned') or '').strip().upper()
+        if last_assigned:
+            if not self._validate_ncf(last_assigned):
+                raise ValueError("El último NCF indicado no es válido.")
+            if not last_assigned.startswith(prefix):
+                raise ValueError("El último NCF debe coincidir con el prefijo configurado.")
+
+        next_sequence = data.get('next_sequence')
+        if isinstance(next_sequence, str):
+            next_sequence = int(next_sequence) if next_sequence.isdigit() else None
+        if isinstance(next_sequence, int) and next_sequence <= 0:
+            raise ValueError("El próximo correlativo debe ser mayor que cero.")
+
+        seq_value: Optional[int] = next_sequence if isinstance(next_sequence, int) else None
+        if seq_value is None:
+            last_seq = self._sequence_from_ncf(last_assigned)
+            if last_seq is not None:
+                seq_value = last_seq + 1
+        if seq_value is None or seq_value <= 0:
+            seq_value = 1
+
+        last_value = last_assigned if last_assigned else (
+            self._format_ncf(prefix, seq_value - 1) if seq_value > 1 else ''
+        )
+
+        payload = {
+            'company_id': int(company_id),
+            'category': category,
+            'prefix': prefix,
+            'next_sequence': int(seq_value),
+            'last_assigned': last_value,
+            'effective_from': effective_from,
+            'notes': notes,
+            'updated_at': datetime.utcnow().isoformat(),
+            'updated_by': self.user_id,
+        }
+
+        config_id = data.get('id')
+        try:
+            configs_ref = self.db.collection('ncf_sequence_configs')
+            if config_id:
+                configs_ref.document(str(config_id)).set(payload, merge=True)
+            else:
+                payload['created_at'] = datetime.utcnow().isoformat()
+                payload['created_by'] = self.user_id
+                doc_ref = configs_ref.document()
+                doc_ref.set(payload)
+                config_id = doc_ref.id
+        except Exception as exc:
+            print(f"[FIREBASE] Error guardando configuración NCF: {exc}")
+            raise
+
+        return self._get_config_by_id(company_id, config_id) or {}
+
+    def delete_ncf_sequence_config(self, company_id: int, config_id: Any) -> None:
+        try:
+            self.db.collection('ncf_sequence_configs').document(str(config_id)).delete()
+        except Exception as exc:
+            print(f"[FIREBASE] Error eliminando configuración NCF: {exc}")
+
+    def resolve_ncf_prefix(
+        self,
+        company_id: int,
+        category: str,
+        default_prefix: Optional[str] = None,
+        reference_date: Optional[str] = None,
+    ) -> str:
+        prefix = (default_prefix or 'B01').upper()
+        configs = self._fetch_sequence_configs(company_id)
+        config = self._choose_config(configs, category, None, reference_date)
+        if config and config.get('prefix'):
+            return str(config.get('prefix')).upper()
+        return prefix
+
     # ===== MÉTODOS ADICIONALES PARA COMPATIBILIDAD =====
-    
+
     def get_invoice_items(self, invoice_id: int) -> List[Dict[str, Any]]:
         """Obtiene los ítems de una factura específica."""
         try:

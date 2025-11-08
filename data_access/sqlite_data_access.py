@@ -130,13 +130,58 @@ class SQLiteDataAccess(DataAccess):
     
     # ===== NCF / SECUENCIAS =====
     
-    def get_next_ncf(self, company_id: int, ncf_type: str) -> str:
+    def get_next_ncf(self, company_id: int, ncf_type: str, category: Optional[str] = None) -> str:
         """Obtiene el siguiente NCF disponible para una empresa y tipo."""
         try:
-            return self.logic.get_next_ncf(company_id, ncf_type)
+            return self.logic.get_next_ncf(company_id, ncf_type, category)
         except AttributeError:
             # Fallback básico si no existe el método
             return f"B{ncf_type}0000000001"
+
+    def mark_ncf_used(self, company_id: int, ncf: str) -> None:
+        try:
+            self.logic.mark_ncf_used(company_id, ncf)
+        except AttributeError:
+            pass
+
+    def reserve_ncf(self, company_id: int, ncf: str) -> None:
+        try:
+            if hasattr(self.logic, "reserve_ncf"):
+                self.logic.reserve_ncf(company_id, ncf)
+            else:
+                self.logic.mark_ncf_used(company_id, ncf)
+        except AttributeError:
+            pass
+
+    def list_ncf_sequence_configs(self, company_id: int) -> List[Dict[str, Any]]:
+        try:
+            return self.logic.list_ncf_sequence_configs(company_id)
+        except AttributeError:
+            return []
+
+    def save_ncf_sequence_config(self, company_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            return self.logic.save_ncf_sequence_config(company_id, data)
+        except AttributeError:
+            return {}
+
+    def delete_ncf_sequence_config(self, company_id: int, config_id: Any) -> None:
+        try:
+            self.logic.delete_ncf_sequence_config(company_id, config_id)
+        except AttributeError:
+            pass
+
+    def resolve_ncf_prefix(
+        self,
+        company_id: int,
+        category: str,
+        default_prefix: Optional[str] = None,
+        reference_date: Optional[str] = None,
+    ) -> str:
+        try:
+            return self.logic.resolve_ncf_prefix(company_id, category, default_prefix, reference_date)
+        except AttributeError:
+            return (default_prefix or "B01").upper()
     
     # ===== MÉTODOS ADICIONALES PARA COMPATIBILIDAD =====
     

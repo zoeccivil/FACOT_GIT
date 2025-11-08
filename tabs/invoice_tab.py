@@ -12,7 +12,12 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QDate, Qt, pyqtSignal, QRegularExpression
 from PyQt6.QtGui import QRegularExpressionValidator
 
-from constants import NCF_TYPES, ITBIS_RATE, DEFAULT_CURRENCY
+from constants import (
+    NCF_TYPES,
+    ITBIS_RATE,
+    DEFAULT_CURRENCY,
+    NCF_CATEGORY_DEFAULT_PREFIX,
+)
 
 from utils.quotation_templates import (
     generate_quotation_excel as generate_invoice_excel,
@@ -60,17 +65,6 @@ except Exception:
         DEFAULT_LOGO_PATH = ""
     config_facot = _Cfg()
 
-# Mapeo de tipo de factura (invoice_category) -> prefijo NCF
-CATEGORY_TO_PREFIX = {
-    "FACTURA PRIVADA": "B01",
-    "FACTURA GUBERNAMENTAL": "B15",
-    "FACTURA GUBERMAMENTAL": "B15",  # tolera typo
-    "FACTURA CONSUMIDOR FINAL": "B02",
-    "FACTURA EXENTA": "B14",
-    "FACTURA EXENTA (REGIMEN ESPECIAL)": "B14",
-    "FACTURA EXCENTA (REGIMEN ESPECIAL)": "B14",
-}
-
 # Fallback de unidad: usa el estándar de tu tabla (UND)
 DEFAULT_UNIT_FALLBACK = "UND"
 
@@ -117,6 +111,11 @@ class InvoiceTab(QWidget):
         self.btn_next_ncf.setToolTip("Calcular el siguiente NCF según Tipo Factura")
         top_btn_row.addWidget(self.btn_next_ncf)
         self.btn_next_ncf.clicked.connect(self._on_next_ncf_clicked)
+
+        self.btn_configure_ncf = QPushButton("Configurar NCF...")
+        self.btn_configure_ncf.setToolTip("Administrar prefijos y secuencias por empresa")
+        top_btn_row.addWidget(self.btn_configure_ncf)
+        self.btn_configure_ncf.clicked.connect(self._open_ncf_sequence_config)
 
         top_btn_row.addStretch(1)
         layout.addLayout(top_btn_row)
@@ -248,9 +247,23 @@ class InvoiceTab(QWidget):
 
     def _category_prefix(self) -> str:
         cat = (self.invoice_kind_combo.currentText() or "").strip().upper()
-        if cat in CATEGORY_TO_PREFIX:
-            return CATEGORY_TO_PREFIX[cat]
-        return NCF_TYPES.get(self.ncf_type_combo.currentText(), "B01")
+        default_prefix = NCF_CATEGORY_DEFAULT_PREFIX.get(
+            cat,
+            NCF_TYPES.get(self.ncf_type_combo.currentText(), "B01"),
+        )
+        company = self.get_current_company()
+        if company and hasattr(self.logic, "resolve_ncf_prefix"):
+            try:
+                resolved = self.logic.resolve_ncf_prefix(
+                    int(company.get("id")),
+                    cat,
+                    default_prefix=default_prefix,
+                )
+                if resolved:
+                    return (resolved or default_prefix or "B01").upper()
+            except Exception:
+                pass
+        return (default_prefix or "B01").upper()
 
     def _update_ncf_sequence(self):
         company = self.get_current_company()
@@ -258,8 +271,9 @@ class InvoiceTab(QWidget):
             self.ncf_number_edit.clear()
             return
         prefix3 = self._category_prefix()
+        category = (self.invoice_kind_combo.currentText() or "").strip().upper()
         try:
-            next_ncf = self.logic.get_next_ncf(int(company['id']), prefix3)
+            next_ncf = self.logic.get_next_ncf(int(company['id']), prefix3, category)
         except Exception:
             next_ncf = ""
         self.ncf_number_edit.setText(next_ncf or "")
@@ -270,11 +284,49 @@ class InvoiceTab(QWidget):
             QMessageBox.warning(self, "NCF", "Seleccione una empresa.")
             return
         prefix3 = self._category_prefix()
+        category = (self.invoice_kind_combo.currentText() or "").strip().upper()
         try:
-            next_ncf = self.logic.get_next_ncf(int(comp.get("id")), prefix3)
+            next_ncf = self.logic.get_next_ncf(int(comp.get("id")), prefix3, category)
             self.ncf_number_edit.setText(next_ncf)
         except Exception as e:
             QMessageBox.critical(self, "NCF", f"No se pudo calcular el siguiente NCF:\n{e}")
+
+    def _open_ncf_sequence_config(self):
+        company = self.get_current_company()
+        current_company_id = None
+        if company:
+            try:
+                current_company_id = int(company.get("id"))
+            except Exception:
+                current_company_id = None
+        try:
+            from dialogs.ncf_sequence_dialog import NCFSequenceDialog
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "NCF",
+                f"No se pudo cargar el diálogo de secuencias NCF:\n{exc}"
+            )
+            return
+
+        try:
+            companies = []
+            if hasattr(self.logic, "get_all_companies"):
+                companies = self.logic.get_all_companies()
+            dialog = NCFSequenceDialog(
+                logic=self.logic,
+                companies=companies,
+                current_company_id=current_company_id,
+                parent=self,
+            )
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self._update_ncf_sequence()
+        except Exception as exc:
+            QMessageBox.critical(
+                self,
+                "NCF",
+                f"Error al abrir la configuración de secuencias:\n{exc}"
+            )
 
     # -------------------------
     # Moneda / Fechas
@@ -806,11 +858,12 @@ class InvoiceTab(QWidget):
             return None
         current = (self.ncf_number_edit.text() or "").strip()
         prefix = self._category_prefix()
+        category = (self.invoice_kind_combo.currentText() or "").strip().upper()
         assigned = current
         try:
             if not current:
                 if hasattr(self.logic, "get_next_ncf"):
-                    assigned = self.logic.get_next_ncf(int(company['id']), prefix)
+                    assigned = self.logic.get_next_ncf(int(company['id']), prefix, category)
                     if assigned:
                         self.ncf_number_edit.setText(assigned)
                 else:

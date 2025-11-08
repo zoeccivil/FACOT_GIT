@@ -106,8 +106,44 @@ class DataAccess(ABC):
     # ===== NCF / SECUENCIAS =====
     
     @abstractmethod
-    def get_next_ncf(self, company_id: int, ncf_type: str) -> str:
+    def get_next_ncf(self, company_id: int, ncf_type: str, category: Optional[str] = None) -> str:
         """Obtiene el siguiente NCF disponible para una empresa y tipo."""
+        pass
+
+    @abstractmethod
+    def mark_ncf_used(self, company_id: int, ncf: str) -> None:
+        """Marca un NCF como utilizado."""
+        pass
+
+    @abstractmethod
+    def reserve_ncf(self, company_id: int, ncf: str) -> None:
+        """Reserva un NCF para evitar duplicados."""
+        pass
+
+    @abstractmethod
+    def list_ncf_sequence_configs(self, company_id: int) -> List[Dict[str, Any]]:
+        """Lista configuraciones de secuencias NCF para una empresa."""
+        pass
+
+    @abstractmethod
+    def save_ncf_sequence_config(self, company_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Crea o actualiza una configuración de secuencia NCF."""
+        pass
+
+    @abstractmethod
+    def delete_ncf_sequence_config(self, company_id: int, config_id: Any) -> None:
+        """Elimina una configuración de secuencia NCF."""
+        pass
+
+    @abstractmethod
+    def resolve_ncf_prefix(
+        self,
+        company_id: int,
+        category: str,
+        default_prefix: Optional[str] = None,
+        reference_date: Optional[str] = None,
+    ) -> str:
+        """Resuelve el prefijo activo para una categoría dada."""
         pass
     
     # ===== UTILIDADES =====

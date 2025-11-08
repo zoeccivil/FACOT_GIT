@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QComboBox, QMessageBox,
-    QMenuBar, QMenu, QFileDialog, QStatusBar
+    QMenuBar, QMenu, QFileDialog, QStatusBar, QDialog
 )
 from PyQt6.QtGui import QAction
 from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
@@ -250,6 +250,10 @@ class MainWindow(QMainWindow):
         action_edit_template.triggered.connect(self._menu_edit_template)
         opciones_menu.addAction(action_edit_template)
 
+        configurar_ncf_action = QAction("Configurar Secuencias NCF...", self)
+        configurar_ncf_action.triggered.connect(self._abrir_configuracion_ncf)
+        opciones_menu.addAction(configurar_ncf_action)
+
     # --------- Menu handlers ----------
     def _abrir_base_de_datos(self):
         filename, _ = QFileDialog.getOpenFileName(self, "Abrir Base de Datos", "", "Database Files (*.db);;Todos los archivos (*)")
@@ -296,9 +300,39 @@ class MainWindow(QMainWindow):
     def _abrir_dialogo_migracion(self):
         """Abre el diálogo de migración SQLite → Firebase"""
         from dialogs.migration_dialog import MigrationDialog
-        
+
         dialog = MigrationDialog(self)
         dialog.exec()
+
+    def _abrir_configuracion_ncf(self):
+        try:
+            from dialogs.ncf_sequence_dialog import NCFSequenceDialog
+        except Exception as exc:
+            QMessageBox.critical(self, "NCF", f"No se pudo cargar el diálogo de secuencias NCF:\n{exc}")
+            return
+
+        logic_obj = self.hybrid_logic if self.hybrid_logic else self.logic
+        try:
+            companies = []
+            if hasattr(logic_obj, "get_all_companies"):
+                companies = logic_obj.get_all_companies()
+            current = self.get_current_company()
+            current_id = None
+            if current:
+                try:
+                    current_id = int(current.get("id"))
+                except Exception:
+                    current_id = None
+            dialog = NCFSequenceDialog(
+                logic=logic_obj,
+                companies=companies,
+                current_company_id=current_id,
+                parent=self,
+            )
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                self.invoice_tab._update_ncf_sequence()
+        except Exception as exc:
+            QMessageBox.critical(self, "NCF", f"Error al abrir la configuración de secuencias:\n{exc}")
 
     # --------- Empresas ----------
     def _populate_companies(self):

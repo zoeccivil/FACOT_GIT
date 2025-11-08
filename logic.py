@@ -8,6 +8,8 @@ import config_facot
 # Cerca del inicio del archivo, junto con tus otros imports
 from typing import Any, Dict, List, Optional
 
+from constants import NCF_CATEGORY_DEFAULT_PREFIX
+
 
 # NCF válido:
 # - Estándar (no E): 1 letra distinta de E + 10 dígitos
@@ -138,6 +140,9 @@ class LogicController:
 
         # NUEVO: asegurar columnas de vencimiento
         self._ensure_due_date_columns()
+
+        # Configuración de secuencias NCF por empresa
+        self._ensure_ncf_sequence_tables()
 
         self.conn.commit()
 
@@ -380,18 +385,43 @@ class LogicController:
                 pass
         return mx
 
-    def get_next_ncf(self, company_id: int, prefix3: str) -> str:
+    def get_next_ncf(self, company_id: int, prefix3: str, category: str | None = None) -> str:
         """
-        Siguiente NCF tomando SOLO emitidas:
-        - Prefijo 'E??' => E + tipo2 + secuencia (11 dígitos, total 14)
-        - Prefijo letra≠E => letra + tipo2 + secuencia (8 dígitos, total 11)
+        Obtiene el siguiente NCF considerando la configuración de secuencias.
+
+        Si existe una configuración específica por empresa/categoría, usa el prefijo
+        y correlativo definidos allí. En caso contrario recurre al máximo registrado
+        en facturas emitidas.
         """
         if not prefix3 or len(prefix3) != 3 or not prefix3[0].isalpha() or not prefix3[1:].isdigit():
             prefix3 = "B01"
         prefix3 = prefix3.upper()
-        pad = self._pad_len_for_letter(prefix3[0])
-        max_seq = self._max_seq_for_prefix(company_id, prefix3, issued_only=True)
-        return f"{prefix3}{(max_seq + 1):0{pad}d}"
+        category_upper = (category or "").strip().upper() or None
+        today = datetime.date.today().isoformat()
+
+        config = None
+        if category_upper:
+            config = self._select_ncf_sequence_config(company_id, category_upper, None, today)
+        if not config:
+            config = self._select_ncf_sequence_config(company_id, None, prefix3, today)
+
+        if config:
+            cfg_prefix = (config.get("prefix") or prefix3).upper()
+            next_seq = int(config.get("next_sequence") or 1)
+            if next_seq <= 0:
+                next_seq = 1
+            pad = self._pad_len_for_letter(cfg_prefix[0])
+            return f"{cfg_prefix}{next_seq:0{pad}d}"
+
+        resolved_prefix = self.resolve_ncf_prefix(
+            company_id,
+            category_upper or "",
+            default_prefix=prefix3,
+            reference_date=today,
+        )
+        pad = self._pad_len_for_letter(resolved_prefix[0])
+        max_seq = self._max_seq_for_prefix(company_id, resolved_prefix, issued_only=True)
+        return f"{resolved_prefix}{(max_seq + 1):0{pad}d}"
 
     def find_next_free_ncf(self, company_id: int, prefix3: str, start_seq: int) -> str:
         """
@@ -455,6 +485,313 @@ class LogicController:
             except Exception:
                 seq_val = 0
             return f"{letter}{tipo2}{seq_val:08d}"
+
+    @staticmethod
+    def _normalize_iso_date(value: str | None) -> str:
+        if not value:
+            return "1900-01-01"
+        try:
+            return datetime.date.fromisoformat(value[:10]).isoformat()
+        except Exception:
+            return "1900-01-01"
+
+    def _format_ncf(self, prefix3: str, seq_value: int | None) -> str:
+        if not prefix3 or seq_value is None or seq_value <= 0:
+            return ""
+        pad = self._pad_len_for_letter(prefix3[0])
+        return f"{prefix3.upper()}{seq_value:0{pad}d}"
+
+    @staticmethod
+    def _sequence_from_ncf(ncf: str | None) -> int | None:
+        s = (ncf or "").strip().upper()
+        if len(s) < 4 or not s[3:].isdigit():
+            return None
+        try:
+            return int(s[3:])
+        except Exception:
+            return None
+
+    @staticmethod
+    def _category_for_prefix(prefix3: str) -> str | None:
+        pfx = (prefix3 or "").upper()
+        for category, default_prefix in NCF_CATEGORY_DEFAULT_PREFIX.items():
+            if (default_prefix or "").upper() == pfx:
+                return category.upper()
+        return None
+
+    def _select_ncf_sequence_config(
+        self,
+        company_id: int,
+        category: str | None,
+        prefix: str | None,
+        reference_date: str | None = None,
+    ) -> Dict[str, Any] | None:
+        cur = self.conn.cursor()
+        params: List[Any] = [int(company_id)]
+        sql = """
+            SELECT id, company_id, category, prefix, next_sequence, last_assigned,
+                   effective_from, notes, updated_at
+            FROM ncf_sequence_configs
+            WHERE company_id = ?
+        """
+        if category:
+            sql += " AND UPPER(category) = ?"
+            params.append(category.upper())
+        if prefix:
+            sql += " AND UPPER(prefix) = ?"
+            params.append(prefix.upper())
+        sql += " ORDER BY effective_from ASC, id ASC"
+        cur.execute(sql, params)
+        rows = [dict(r) for r in cur.fetchall()]
+        if not rows:
+            return None
+        ref = self._normalize_iso_date(reference_date)
+        active: Dict[str, Any] | None = None
+        future: Dict[str, Any] | None = None
+        for row in rows:
+            eff = self._normalize_iso_date(row.get("effective_from"))
+            row["effective_from"] = eff
+            if eff <= ref:
+                if (not active) or eff >= active.get("effective_from", "1900-01-01"):
+                    active = row
+            elif future is None:
+                future = row
+        return active or future or rows[-1]
+
+    def _enrich_sequence_row(self, raw: Dict[str, Any]) -> Dict[str, Any]:
+        data = dict(raw)
+        prefix = (data.get("prefix") or "").upper()
+        data["prefix"] = prefix
+        next_sequence = int(data.get("next_sequence") or 1)
+        if next_sequence <= 0:
+            next_sequence = 1
+        data["next_sequence"] = next_sequence
+        last_assigned = (data.get("last_assigned") or "").upper()
+        if not last_assigned and next_sequence > 1:
+            last_assigned = self._format_ncf(prefix, next_sequence - 1)
+        data["last_assigned"] = last_assigned
+        data["next_ncf"] = self._format_ncf(prefix, next_sequence)
+        data["category"] = (data.get("category") or "").upper()
+        data["effective_from"] = self._normalize_iso_date(data.get("effective_from"))
+        data["notes"] = data.get("notes") or ""
+        return data
+
+    def _get_ncf_sequence_config_by_id(self, config_id: Any) -> Dict[str, Any] | None:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, company_id, category, prefix, next_sequence, last_assigned,
+                   effective_from, notes, updated_at
+            FROM ncf_sequence_configs
+            WHERE id = ?
+            """,
+            (config_id,),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return self._enrich_sequence_row(dict(row))
+
+    def list_ncf_sequence_configs(self, company_id: int) -> List[Dict[str, Any]]:
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            SELECT id, company_id, category, prefix, next_sequence, last_assigned,
+                   effective_from, notes, updated_at
+            FROM ncf_sequence_configs
+            WHERE company_id = ?
+            ORDER BY UPPER(category) ASC, effective_from ASC, id ASC
+            """,
+            (int(company_id),),
+        )
+        rows = [self._enrich_sequence_row(dict(r)) for r in cur.fetchall()]
+        reference_date = datetime.date.today().isoformat()
+        active_per_category: Dict[str, tuple[int, str]] = {}
+        for row in rows:
+            cat = row.get("category", "")
+            eff = row.get("effective_from") or "1900-01-01"
+            try:
+                row_id = int(row.get("id"))
+            except Exception:
+                continue
+            if eff <= reference_date:
+                current = active_per_category.get(cat)
+                if (not current) or eff >= current[1]:
+                    active_per_category[cat] = (row_id, eff)
+        for row in rows:
+            cat = row.get("category", "")
+            row_id = None
+            try:
+                row_id = int(row.get("id"))
+            except Exception:
+                pass
+            active = active_per_category.get(cat)
+            row["is_active"] = bool(active and active[0] == row_id)
+        return rows
+
+    def save_ncf_sequence_config(self, company_id: int, data: Dict[str, Any]) -> Dict[str, Any]:
+        category = (data.get("category") or "").strip().upper()
+        if not category:
+            raise ValueError("La categoría/tipo de comprobante es obligatoria.")
+        prefix = (data.get("prefix") or "").strip().upper()
+        if len(prefix) != 3 or not prefix[0].isalpha() or not prefix[1:].isdigit():
+            raise ValueError("El prefijo debe tener formato LETRA + 2 dígitos (ej. B01, E31).")
+
+        effective_from = self._normalize_iso_date(data.get("effective_from"))
+        notes = (data.get("notes") or "").strip()
+
+        last_assigned = (data.get("last_assigned") or "").strip().upper()
+        if last_assigned:
+            if not self.validate_ncf(last_assigned):
+                raise ValueError("El último NCF indicado no es válido.")
+            if not last_assigned.startswith(prefix):
+                raise ValueError("El último NCF debe iniciar con el prefijo configurado.")
+
+        next_sequence = data.get("next_sequence")
+        seq_value = None
+        if isinstance(next_sequence, str):
+            next_sequence = int(next_sequence) if next_sequence.isdigit() else None
+        if isinstance(next_sequence, int):
+            if next_sequence <= 0:
+                raise ValueError("El siguiente correlativo debe ser mayor que cero.")
+            seq_value = max(next_sequence, 1)
+        if seq_value is None:
+            last_seq = self._sequence_from_ncf(last_assigned)
+            if last_seq is not None:
+                seq_value = last_seq + 1
+        if seq_value is None:
+            seq_value = self._max_seq_for_prefix(company_id, prefix, issued_only=True) + 1
+        if seq_value <= 0:
+            seq_value = 1
+
+        last_value = last_assigned
+        if not last_value and seq_value > 1:
+            last_value = self._format_ncf(prefix, seq_value - 1)
+
+        config_id = data.get("id")
+        timestamp = datetime.datetime.utcnow().isoformat()
+        cur = self.conn.cursor()
+        if config_id:
+            cur.execute(
+                """
+                UPDATE ncf_sequence_configs
+                   SET category = ?, prefix = ?, next_sequence = ?, last_assigned = ?,
+                       effective_from = ?, notes = ?, updated_at = ?
+                 WHERE id = ? AND company_id = ?
+                """,
+                (
+                    category,
+                    prefix,
+                    int(seq_value),
+                    last_value,
+                    effective_from,
+                    notes,
+                    timestamp,
+                    int(config_id),
+                    int(company_id),
+                ),
+            )
+        else:
+            cur.execute(
+                """
+                INSERT INTO ncf_sequence_configs (
+                    company_id, category, prefix, next_sequence, last_assigned,
+                    effective_from, notes, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(company_id),
+                    category,
+                    prefix,
+                    int(seq_value),
+                    last_value,
+                    effective_from,
+                    notes,
+                    timestamp,
+                ),
+            )
+            config_id = cur.lastrowid
+        self.conn.commit()
+        saved = self._get_ncf_sequence_config_by_id(config_id)
+        return saved or {}
+
+    def delete_ncf_sequence_config(self, company_id: int, config_id: Any) -> None:
+        cur = self.conn.cursor()
+        cur.execute(
+            "DELETE FROM ncf_sequence_configs WHERE id = ? AND company_id = ?",
+            (config_id, int(company_id)),
+        )
+        self.conn.commit()
+
+    def resolve_ncf_prefix(
+        self,
+        company_id: int,
+        category: str,
+        default_prefix: str | None = None,
+        reference_date: str | None = None,
+    ) -> str:
+        default = (default_prefix or "B01").upper()
+        category_upper = (category or "").strip().upper()
+        config = None
+        if category_upper:
+            config = self._select_ncf_sequence_config(company_id, category_upper, None, reference_date)
+        if config and config.get("prefix"):
+            return str(config.get("prefix")).upper()
+        return default
+
+    def _apply_sequence_usage(self, company_id: int, prefix3: str, seq_value: int, ncf_str: str) -> bool:
+        today = datetime.date.today().isoformat()
+        config = self._select_ncf_sequence_config(company_id, None, prefix3, today)
+        if not config:
+            category = self._category_for_prefix(prefix3)
+            if category:
+                config = self._select_ncf_sequence_config(company_id, category, None, today)
+        if not config:
+            return False
+        new_next = seq_value + 1
+        current_next = int(config.get("next_sequence") or 1)
+        if current_next > new_next:
+            new_next = current_next
+        timestamp = datetime.datetime.utcnow().isoformat()
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            UPDATE ncf_sequence_configs
+               SET next_sequence = ?, last_assigned = ?, updated_at = ?
+             WHERE id = ?
+            """,
+            (
+                int(new_next),
+                ncf_str,
+                timestamp,
+                int(config.get("id")),
+            ),
+        )
+        self.conn.commit()
+        return True
+
+    def mark_ncf_used(self, company_id: int, ncf: str) -> None:
+        letter, tipo2, seq_str = self.split_ncf(ncf)
+        if not letter or not tipo2 or not seq_str or not seq_str.isdigit():
+            raise ValueError("NCF inválido para marcar como usado.")
+        prefix3 = f"{letter}{tipo2}".upper()
+        seq_value = int(seq_str)
+        ncf_upper = (ncf or "").strip().upper()
+        if self._apply_sequence_usage(company_id, prefix3, seq_value, ncf_upper):
+            return
+        category = self._category_for_prefix(prefix3) or prefix3
+        payload = {
+            "category": category,
+            "prefix": prefix3,
+            "last_assigned": ncf_upper,
+            "next_sequence": seq_value + 1,
+            "effective_from": datetime.date.today().isoformat(),
+        }
+        self.save_ncf_sequence_config(company_id, payload)
+
+    def reserve_ncf(self, company_id: int, ncf: str) -> None:
+        # Para evitar duplicados, usamos la misma lógica que mark_ncf_used.
+        self.mark_ncf_used(company_id, ncf)
 
     # -------------------------
     # Facturas
@@ -766,6 +1103,41 @@ class LogicController:
         if "due_date" not in cols:
             cur.execute("ALTER TABLE quotations ADD COLUMN due_date TEXT")
 
+        self.conn.commit()
+
+
+    def _ensure_ncf_sequence_tables(self) -> None:
+        """Crea tablas auxiliares para administrar secuencias de NCF."""
+        cur = self.conn.cursor()
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS ncf_sequence_configs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                company_id INTEGER NOT NULL,
+                category TEXT NOT NULL,
+                prefix TEXT NOT NULL,
+                next_sequence INTEGER NOT NULL DEFAULT 1,
+                last_assigned TEXT,
+                effective_from TEXT NOT NULL DEFAULT '1900-01-01',
+                notes TEXT,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE,
+                UNIQUE(company_id, category, effective_from)
+            )
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ncf_seq_company
+                ON ncf_sequence_configs(company_id)
+            """
+        )
+        cur.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ncf_seq_category
+                ON ncf_sequence_configs(company_id, category)
+            """
+        )
         self.conn.commit()
 
 
