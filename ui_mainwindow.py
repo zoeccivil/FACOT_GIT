@@ -43,6 +43,68 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import QDate, Qt, pyqtSignal
 # ... el resto de imports ...
 
+class HybridLogicWrapper:
+    """
+    Wrapper híbrido que combina logic (SQLite) y data_access (Firebase).
+    
+    Intercepta llamadas de atributos y las redirige al backend correcto:
+    - Si data_access tiene el método, lo usa (Firebase)
+    - Si no, delega a logic (SQLite o métodos no implementados en Firebase)
+    
+    Esto permite que tabs existentes funcionen con ambos backends
+    sin modificar su código.
+    """
+    
+    def __init__(self, logic, data_access=None):
+        self._logic = logic
+        self._data_access = data_access
+        self._use_firebase = data_access is not None
+        
+        # Para debugging
+        if self._use_firebase:
+            print(f"[HYBRID] Created hybrid wrapper with Firebase backend")
+        else:
+            print(f"[HYBRID] Created hybrid wrapper with SQLite only")
+    
+    def __getattr__(self, name):
+        """
+        Intercepta acceso a atributos/métodos.
+        
+        Prioridad:
+        1. Si data_access existe y tiene el método -> usar Firebase
+        2. Sino -> usar logic (SQLite)
+        """
+        # Si tenemos data_access y tiene el método, usarlo
+        if self._use_firebase and self._data_access and hasattr(self._data_access, name):
+            attr = getattr(self._data_access, name)
+            # Si es callable, retornar función que logguea
+            if callable(attr):
+                def logged_call(*args, **kwargs):
+                    # print(f"[HYBRID] Using Firebase for: {name}")
+                    return attr(*args, **kwargs)
+                return logged_call
+            return attr
+        
+        # Sino, delegar a logic
+        if hasattr(self._logic, name):
+            attr = getattr(self._logic, name)
+            if callable(attr):
+                def logged_call(*args, **kwargs):
+                    # print(f"[HYBRID] Using SQLite for: {name}")
+                    return attr(*args, **kwargs)
+                return logged_call
+            return attr
+        
+        # Si no existe en ninguno, error estándar
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+    
+    # Propiedades que deben accederse directamente
+    @property
+    def conn(self):
+        """Retorna conexión SQLite para compatibilidad."""
+        return self._logic.conn if hasattr(self._logic, 'conn') else None
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -50,6 +112,7 @@ class MainWindow(QMainWindow):
         self.resize(1100, 790)
         self.data_access = None  # Will hold DataAccess instance
         self.current_access_mode = "SQLITE"  # Track current mode
+        self.hybrid_logic = None  # Will hold HybridLogicWrapper
         self._init_db()
         self._setup_ui()
         self._setup_menu()
@@ -84,10 +147,16 @@ class MainWindow(QMainWindow):
             self.data_access = get_data_access(logic_controller=self.logic, mode=mode_enum)
             self.current_access_mode = preferred_mode
             
+            # Crear wrapper híbrido que combina logic y data_access
+            self.hybrid_logic = HybridLogicWrapper(self.logic, self.data_access)
+            print(f"[MAIN] Created hybrid logic wrapper")
+            
         except Exception as e:
             print(f"[MAIN] Warning: Could not initialize data_access: {e}")
             self.data_access = None
             self.current_access_mode = "SQLITE"
+            # Wrapper solo con logic
+            self.hybrid_logic = HybridLogicWrapper(self.logic, None)
 
     def _setup_ui(self):
         central = QWidget(); layout = QVBoxLayout(central); self.setCentralWidget(central)
@@ -105,10 +174,14 @@ class MainWindow(QMainWindow):
         from PyQt6.QtWidgets import QTabWidget
         self.tabs = QTabWidget()
 
-        self.invoice_tab = InvoiceTab(self.logic, get_company)
-        self.quotation_tab = QuotationTab(self.logic, get_company)
-        self.invoice_history_tab = InvoiceHistoryTab(self.logic, get_company)
-        self.quotation_history_tab = QuotationHistoryTab(self.logic, get_company)
+        # Usar hybrid_logic en lugar de logic directo
+        # Esto permite que los tabs usen Firebase o SQLite transparentemente
+        logic_to_pass = self.hybrid_logic if self.hybrid_logic else self.logic
+        
+        self.invoice_tab = InvoiceTab(logic_to_pass, get_company)
+        self.quotation_tab = QuotationTab(logic_to_pass, get_company)
+        self.invoice_history_tab = InvoiceHistoryTab(logic_to_pass, get_company)
+        self.quotation_history_tab = QuotationHistoryTab(logic_to_pass, get_company)
 
         # Conexiones: refrescar historial al guardar
         self.invoice_tab.invoice_saved.connect(lambda _id: self.invoice_history_tab.refresh())
@@ -299,31 +372,26 @@ class MainWindow(QMainWindow):
             from data_access import get_current_mode, DataAccessMode
             from firebase import get_firebase_client
             
-            current_mode = get_current_mode()
+            # Verificar si data_access es realmente FirebaseDataAccess
+            is_using_firebase = (
+                self.data_access is not None and 
+                "Firebase" in type(self.data_access).__name__
+            )
             
             # Verificar si Firebase está disponible
             firebase_client = get_firebase_client()
             firebase_available = firebase_client.is_available()
             
-            if current_mode == DataAccessMode.FIREBASE and firebase_available:
+            if is_using_firebase and firebase_available:
                 self.current_access_mode = "FIREBASE"
                 self.connection_status.set_mode("FIREBASE")
+                self.connection_status.set_online_status(True)
                 print("[MAIN] Detected Firebase mode - updating status bar")
-            elif current_mode == DataAccessMode.AUTO:
-                if firebase_available:
-                    self.current_access_mode = "FIREBASE"
-                    self.connection_status.set_mode("AUTO")
-                    print("[MAIN] Detected AUTO mode with Firebase available")
-                else:
-                    self.current_access_mode = "SQLITE"
-                    db_path = facot_config.get_db_path()
-                    self.connection_status.set_mode("AUTO", db_path)
-                    print("[MAIN] Detected AUTO mode, using SQLite")
             else:
                 self.current_access_mode = "SQLITE"
                 db_path = facot_config.get_db_path()
                 self.connection_status.set_mode("SQLITE", db_path)
-                print("[MAIN] Using SQLite mode")
+                print(f"[MAIN] Using SQLite mode: {db_path}")
                 
         except Exception as e:
             print(f"[MAIN] Error detecting connection mode: {e}")

@@ -138,6 +138,72 @@ class SQLiteDataAccess(DataAccess):
             # Fallback básico si no existe el método
             return f"B{ncf_type}0000000001"
     
+    # ===== MÉTODOS ADICIONALES PARA COMPATIBILIDAD =====
+    
+    def get_invoice_items(self, invoice_id: int) -> List[Dict[str, Any]]:
+        """Obtiene los ítems de una factura específica."""
+        try:
+            return self.logic.get_invoice_items(invoice_id)
+        except AttributeError:
+            return []
+    
+    def get_quotation_items(self, quotation_id: int) -> List[Dict[str, Any]]:
+        """Obtiene los ítems de una cotización específica."""
+        try:
+            return self.logic.get_quotation_items(quotation_id)
+        except AttributeError:
+            return []
+    
+    def search_third_parties(self, query: str, search_by: str = 'name') -> List[Dict[str, Any]]:
+        """Busca terceros por nombre o RNC."""
+        try:
+            return self.logic.search_third_parties(query, search_by=search_by)
+        except AttributeError:
+            return []
+    
+    def add_or_update_third_party(self, rnc: str, name: str) -> None:
+        """Agrega o actualiza un tercero por RNC."""
+        try:
+            self.logic.add_or_update_third_party(rnc, name)
+        except AttributeError:
+            pass
+    
+    def validate_ncf(self, ncf: str) -> bool:
+        """Valida formato de NCF."""
+        try:
+            return self.logic.validate_ncf(ncf)
+        except AttributeError:
+            # Fallback básico
+            return bool(ncf and len(ncf) >= 11)
+    
+    def get_facturas(self, company_id: int, only_issued: bool = True) -> List[Dict[str, Any]]:
+        """Alias de get_invoices para compatibilidad."""
+        try:
+            return self.logic.get_facturas(company_id, only_issued=only_issued)
+        except AttributeError:
+            return self.get_invoices(company_id=company_id)
+    
+    def delete_factura(self, factura_id: int) -> None:
+        """Elimina una factura."""
+        try:
+            self.logic.delete_factura(factura_id)
+        except AttributeError:
+            pass
+    
+    def delete_quotation(self, quotation_id: int) -> None:
+        """Elimina una cotización."""
+        try:
+            self.logic.delete_quotation(quotation_id)
+        except AttributeError:
+            pass
+    
+    def update_quotation(self, quotation_id: int, quotation_data: Dict[str, Any], items: List[Dict[str, Any]]) -> None:
+        """Actualiza una cotización."""
+        try:
+            self.logic.update_quotation(quotation_id, quotation_data, items)
+        except AttributeError:
+            pass
+    
     # ===== UTILIDADES =====
     
     def commit(self) -> None:

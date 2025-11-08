@@ -384,6 +384,171 @@ class FirebaseDataAccess(DataAccess):
             print(f"[FIREBASE] Error getting next NCF: {e}")
             return f"B{ncf_type}00000001"
     
+    # ===== MÉTODOS ADICIONALES PARA COMPATIBILIDAD =====
+    
+    def get_invoice_items(self, invoice_id: int) -> List[Dict[str, Any]]:
+        """Obtiene los ítems de una factura específica."""
+        try:
+            invoice_ref = self.db.collection('invoices').document(str(invoice_id))
+            items_ref = invoice_ref.collection('items')
+            
+            items = []
+            for doc in items_ref.stream():
+                item_data = doc.to_dict()
+                item_data['id'] = doc.id
+                items.append(item_data)
+            
+            return items
+        except Exception as e:
+            print(f"[FIREBASE] Error getting invoice items for {invoice_id}: {e}")
+            return []
+    
+    def get_quotation_items(self, quotation_id: int) -> List[Dict[str, Any]]:
+        """Obtiene los ítems de una cotización específica."""
+        try:
+            quotation_ref = self.db.collection('quotations').document(str(quotation_id))
+            items_ref = quotation_ref.collection('items')
+            
+            items = []
+            for doc in items_ref.stream():
+                item_data = doc.to_dict()
+                item_data['id'] = doc.id
+                items.append(item_data)
+            
+            return items
+        except Exception as e:
+            print(f"[FIREBASE] Error getting quotation items for {quotation_id}: {e}")
+            return []
+    
+    def search_third_parties(self, query: str, search_by: str = 'name') -> List[Dict[str, Any]]:
+        """Busca terceros por nombre o RNC."""
+        try:
+            parties_ref = self.db.collection('third_parties')
+            
+            # Firestore no soporta LIKE, filtrar en cliente
+            all_parties = []
+            for doc in parties_ref.limit(100).stream():
+                party_data = doc.to_dict()
+                party_data['id'] = doc.id
+                
+                if search_by == 'name':
+                    if query.lower() in str(party_data.get('name', '')).lower():
+                        all_parties.append(party_data)
+                elif search_by == 'rnc':
+                    if query in str(party_data.get('rnc', '')):
+                        all_parties.append(party_data)
+                
+                if len(all_parties) >= 20:
+                    break
+            
+            return all_parties
+        except Exception as e:
+            print(f"[FIREBASE] Error searching third parties: {e}")
+            return []
+    
+    def add_or_update_third_party(self, rnc: str, name: str) -> None:
+        """Agrega o actualiza un tercero por RNC."""
+        try:
+            parties_ref = self.db.collection('third_parties')
+            query = parties_ref.where('rnc', '==', rnc).limit(1)
+            
+            docs = list(query.stream())
+            
+            party_data = {
+                'rnc': rnc,
+                'name': name,
+            }
+            party_data = self._add_metadata(party_data, is_update=len(docs) > 0)
+            
+            if docs:
+                # Actualizar existente
+                docs[0].reference.update(party_data)
+            else:
+                # Crear nuevo
+                parties_ref.add(party_data)
+                
+        except Exception as e:
+            print(f"[FIREBASE] Error adding/updating third party: {e}")
+            raise
+    
+    def validate_ncf(self, ncf: str) -> bool:
+        """Valida formato de NCF."""
+        if not ncf:
+            return False
+        
+        # Validación básica de formato
+        import re
+        # NCF estándar: letra + 10 dígitos
+        if re.match(r'^[A-Z][0-9]{10}$', ncf):
+            return True
+        # e-CF: E + 13 dígitos
+        if re.match(r'^E[0-9]{13}$', ncf):
+            return True
+        
+        return False
+    
+    def get_facturas(self, company_id: int, only_issued: bool = True) -> List[Dict[str, Any]]:
+        """Alias de get_invoices para compatibilidad con LogicController."""
+        return self.get_invoices(company_id=company_id)
+    
+    def delete_factura(self, factura_id: int) -> None:
+        """Elimina una factura y sus ítems."""
+        try:
+            invoice_ref = self.db.collection('invoices').document(str(factura_id))
+            
+            # Eliminar ítems primero
+            items_ref = invoice_ref.collection('items')
+            for item_doc in items_ref.stream():
+                item_doc.reference.delete()
+            
+            # Eliminar factura
+            invoice_ref.delete()
+            
+        except Exception as e:
+            print(f"[FIREBASE] Error deleting invoice {factura_id}: {e}")
+            raise
+    
+    def delete_quotation(self, quotation_id: int) -> None:
+        """Elimina una cotización y sus ítems."""
+        try:
+            quotation_ref = self.db.collection('quotations').document(str(quotation_id))
+            
+            # Eliminar ítems primero
+            items_ref = quotation_ref.collection('items')
+            for item_doc in items_ref.stream():
+                item_doc.reference.delete()
+            
+            # Eliminar cotización
+            quotation_ref.delete()
+            
+        except Exception as e:
+            print(f"[FIREBASE] Error deleting quotation {quotation_id}: {e}")
+            raise
+    
+    def update_quotation(self, quotation_id: int, quotation_data: Dict[str, Any], items: List[Dict[str, Any]]) -> None:
+        """Actualiza una cotización con sus ítems."""
+        try:
+            quotation_ref = self.db.collection('quotations').document(str(quotation_id))
+            
+            # Actualizar datos de cotización
+            quotation_doc = dict(quotation_data)
+            quotation_doc = self._add_metadata(quotation_doc, is_update=True)
+            quotation_ref.update(quotation_doc)
+            
+            # Eliminar ítems antiguos
+            items_ref = quotation_ref.collection('items')
+            for item_doc in items_ref.stream():
+                item_doc.reference.delete()
+            
+            # Agregar nuevos ítems
+            for idx, item in enumerate(items):
+                item_doc = self._add_metadata(dict(item))
+                items_ref.document(str(idx)).set(item_doc)
+                
+        except Exception as e:
+            print(f"[FIREBASE] Error updating quotation {quotation_id}: {e}")
+            raise
+    
     # ===== UTILIDADES =====
     
     def commit(self) -> None:
