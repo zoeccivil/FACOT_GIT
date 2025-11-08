@@ -48,11 +48,14 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle("Gestión de Facturas y Cotizaciones")
         self.resize(1100, 790)
+        self.data_access = None  # Will hold DataAccess instance
+        self.current_access_mode = "SQLITE"  # Track current mode
         self._init_db()
         self._setup_ui()
         self._setup_menu()
         self._setup_connection_status()
         self._check_online_status()
+        self._detect_and_set_connection_mode()
 
     def _init_db(self):
         db_path = facot_config.get_db_path()
@@ -64,6 +67,14 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Error", "No se seleccionó una base de datos. El programa se cerrará.")
                 sys.exit(1)
         self.logic = LogicController(db_path)
+        
+        # Initialize data_access with SQLite by default
+        try:
+            from data_access import get_data_access, DataAccessMode
+            self.data_access = get_data_access(logic_controller=self.logic, mode=DataAccessMode.SQLITE)
+        except Exception as e:
+            print(f"[MAIN] Warning: Could not initialize data_access: {e}")
+            self.data_access = None
 
     def _setup_ui(self):
         central = QWidget(); layout = QVBoxLayout(central); self.setCentralWidget(central)
@@ -191,7 +202,13 @@ class MainWindow(QMainWindow):
     # --------- Empresas ----------
     def _populate_companies(self):
         self.company_selector.clear()
-        companies = self.logic.get_all_companies()
+        
+        # Use data_access if available, otherwise fallback to logic
+        if self.data_access:
+            companies = self.data_access.get_all_companies()
+        else:
+            companies = self.logic.get_all_companies()
+        
         self.companies = {str(c['name']): c for c in companies}
         self.company_selector.addItems(self.companies.keys())
 
@@ -261,6 +278,47 @@ class MainWindow(QMainWindow):
         self.connection_status.set_online_status(is_online)
         reply.deleteLater()
     
+    def _detect_and_set_connection_mode(self):
+        """
+        Detecta si se está usando Firebase y actualiza el widget de estado.
+        """
+        try:
+            from data_access import get_current_mode, DataAccessMode
+            from firebase import get_firebase_client
+            
+            current_mode = get_current_mode()
+            
+            # Verificar si Firebase está disponible
+            firebase_client = get_firebase_client()
+            firebase_available = firebase_client.is_available()
+            
+            if current_mode == DataAccessMode.FIREBASE and firebase_available:
+                self.current_access_mode = "FIREBASE"
+                self.connection_status.set_mode("FIREBASE")
+                print("[MAIN] Detected Firebase mode - updating status bar")
+            elif current_mode == DataAccessMode.AUTO:
+                if firebase_available:
+                    self.current_access_mode = "FIREBASE"
+                    self.connection_status.set_mode("AUTO")
+                    print("[MAIN] Detected AUTO mode with Firebase available")
+                else:
+                    self.current_access_mode = "SQLITE"
+                    db_path = facot_config.get_db_path()
+                    self.connection_status.set_mode("AUTO", db_path)
+                    print("[MAIN] Detected AUTO mode, using SQLite")
+            else:
+                self.current_access_mode = "SQLITE"
+                db_path = facot_config.get_db_path()
+                self.connection_status.set_mode("SQLITE", db_path)
+                print("[MAIN] Using SQLite mode")
+                
+        except Exception as e:
+            print(f"[MAIN] Error detecting connection mode: {e}")
+            # Fallback to SQLite
+            self.current_access_mode = "SQLITE"
+            db_path = facot_config.get_db_path()
+            self.connection_status.set_mode("SQLITE", db_path)
+    
     def _on_database_changed(self, new_db_path: str):
         """
         Callback cuando el usuario cambia la base de datos.
@@ -274,6 +332,11 @@ class MainWindow(QMainWindow):
             
             # Recrear LogicController con nueva base
             self.logic = LogicController(new_db_path)
+            
+            # Recreate data_access with new logic controller
+            from data_access import get_data_access, DataAccessMode
+            self.data_access = get_data_access(logic_controller=self.logic, mode=DataAccessMode.SQLITE)
+            self.current_access_mode = "SQLITE"
             
             # Actualizar companies
             self._populate_companies()
@@ -311,7 +374,7 @@ class MainWindow(QMainWindow):
             new_mode: Nuevo modo (SQLITE, FIREBASE, AUTO)
         """
         try:
-            from data_access import set_data_access_mode, DataAccessMode
+            from data_access import set_data_access_mode, DataAccessMode, get_data_access
             
             # Mapear string a enum
             mode_map = {
@@ -323,13 +386,41 @@ class MainWindow(QMainWindow):
             mode = mode_map.get(new_mode.upper())
             if mode:
                 set_data_access_mode(mode)
+                self.current_access_mode = new_mode.upper()
                 
-                QMessageBox.information(
-                    self,
-                    "Modo de Conexión",
-                    f"Modo de conexión cambiado a: {new_mode}\n\n"
-                    f"La aplicación ahora usará {new_mode} para acceder a los datos."
-                )
+                # Recreate data_access with new mode
+                try:
+                    if mode == DataAccessMode.SQLITE:
+                        self.data_access = get_data_access(logic_controller=self.logic, mode=mode)
+                    elif mode == DataAccessMode.FIREBASE:
+                        self.data_access = get_data_access(user_id=None, mode=mode)
+                    else:  # AUTO
+                        self.data_access = get_data_access(logic_controller=self.logic, user_id=None, mode=mode)
+                    
+                    # Reload companies with new data access
+                    self._populate_companies()
+                    
+                    # Update connection status display
+                    self._detect_and_set_connection_mode()
+                    
+                    QMessageBox.information(
+                        self,
+                        "Modo de Conexión",
+                        f"Modo de conexión cambiado a: {new_mode}\n\n"
+                        f"La aplicación ahora usará {new_mode} para acceder a los datos."
+                    )
+                except Exception as e:
+                    QMessageBox.critical(
+                        self,
+                        "Error",
+                        f"No se pudo cambiar al modo {new_mode}:\n{str(e)}\n\n"
+                        "Revirtiendo a SQLite."
+                    )
+                    # Revert to SQLite
+                    set_data_access_mode(DataAccessMode.SQLITE)
+                    self.data_access = get_data_access(logic_controller=self.logic, mode=DataAccessMode.SQLITE)
+                    self.current_access_mode = "SQLITE"
+                    self._detect_and_set_connection_mode()
                 
                 # Si se cambió a Firebase o AUTO, verificar que esté configurado
                 if new_mode in ["FIREBASE", "AUTO"]:

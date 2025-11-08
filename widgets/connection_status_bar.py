@@ -85,7 +85,27 @@ class ConnectionStatusBar(QWidget):
         if db_path:
             self.current_db_path = db_path
         
+        # If Firebase mode, check if it's actually available
+        if self.current_mode == "FIREBASE":
+            self._verify_firebase_connection()
+        
         self._update_appearance()
+    
+    def _verify_firebase_connection(self):
+        """Verifica si Firebase está realmente disponible y conectado."""
+        try:
+            from firebase import get_firebase_client
+            client = get_firebase_client()
+            
+            if client.is_available():
+                # Firebase is available, check if online
+                # The online status will be set separately by set_online_status()
+                print("[CONNECTION_STATUS] Firebase is available")
+            else:
+                # Firebase not available, show warning
+                print("[CONNECTION_STATUS] Firebase not available despite FIREBASE mode")
+        except Exception as e:
+            print(f"[CONNECTION_STATUS] Error verifying Firebase: {e}")
     
     def set_online_status(self, is_online: bool):
         """
