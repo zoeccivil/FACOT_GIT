@@ -229,6 +229,12 @@ class MainWindow(QMainWindow):
         migrar_firebase_action.setToolTip("Migrar datos de SQLite a Firebase")
         migrar_firebase_action.triggered.connect(self._abrir_dialogo_migracion)
         herramientas_menu.addAction(migrar_firebase_action)
+        
+        ncf_config_action = QAction("🔢 Configurar Secuencias NCF...", self)
+        ncf_config_action.setShortcut("Ctrl+Shift+N")
+        ncf_config_action.setToolTip("Configurar secuencias de NCF por empresa y tipo de comprobante")
+        ncf_config_action.triggered.connect(self._abrir_configuracion_ncf)
+        herramientas_menu.addAction(ncf_config_action)
 
         # Menú Opciones
         opciones_menu = QMenu("&Opciones", self); menu_bar.addMenu(opciones_menu)
@@ -298,6 +304,13 @@ class MainWindow(QMainWindow):
         from dialogs.migration_dialog import MigrationDialog
         
         dialog = MigrationDialog(self)
+        dialog.exec()
+    
+    def _abrir_configuracion_ncf(self):
+        """Abre el diálogo de configuración de secuencias NCF"""
+        from dialogs.ncf_config_dialog import NCFConfigDialog
+        
+        dialog = NCFConfigDialog(self)
         dialog.exec()
 
     # --------- Empresas ----------
