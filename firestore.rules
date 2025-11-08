@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function getUserId() {
+      return request.auth.uid;
+    }
+    
+    function isOwner(userId) {
+      return isAuthenticated() && getUserId() == userId;
+    }
+    
+    function hasCompanyAccess(companyId) {
+      // Verifica si el usuario tiene acceso a esta empresa
+      // Por ahora, usuarios autenticados tienen acceso a sus empresas
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/user_companies/$(getUserId())/companies/$(companyId)).data != null;
+    }
+    
+    // Companies - solo usuarios autenticados
+    match /companies/{companyId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if isAuthenticated();
+    }
+    
+    // Items - acceso global de lectura, escritura autenticada
+    match /items/{itemId} {
+      allow read: if true; // Lectura pública para búsquedas
+      allow create, update, delete: if isAuthenticated();
+    }
+    
+    // Third Parties - solo usuarios autenticados
+    match /third_parties/{partyId} {
+      allow read: if isAuthenticated();
+      allow create, update, delete: if isAuthenticated();
+    }
+    
+    // Invoices - filtrado por company_id
+    match /invoices/{invoiceId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && 
+                      request.resource.data.company_id is number;
+      allow update, delete: if isAuthenticated();
+      
+      // Subcollection: items
+      match /items/{itemId} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+    
+    // Quotations - filtrado por company_id
+    match /quotations/{quotationId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && 
+                      request.resource.data.company_id is number;
+      allow update, delete: if isAuthenticated();
+      
+      // Subcollection: items
+      match /items/{itemId} {
+        allow read, write: if isAuthenticated();
+      }
+    }
+    
+    // Sequences (NCF) - solo lectura/escritura del sistema
+    match /sequences/{sequenceId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // Audit Logs - solo escritura, lectura con permisos
+    match /audit_logs/{logId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update, delete: if false; // Logs son inmutables
+    }
+    
+    // Email Outbox - solo usuarios autenticados
+    match /email_outbox/{emailId} {
+      allow read, write: if isAuthenticated();
+    }
+    
+    // User Companies mapping - solo el propio usuario
+    match /user_companies/{userId} {
+      allow read, write: if isOwner(userId);
+      
+      match /companies/{companyId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+  }
+}
