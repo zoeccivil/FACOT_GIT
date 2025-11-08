@@ -2,13 +2,16 @@ from __future__ import annotations
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QLabel, QComboBox, QMessageBox,
-    QMenuBar, QMenu, QFileDialog
+    QMenuBar, QMenu, QFileDialog, QStatusBar
 )
 from PyQt6.QtGui import QAction
+from PyQt6.QtNetwork import QNetworkAccessManager, QNetworkRequest
+from PyQt6.QtCore import QUrl
 import os, sys
 
 import facot_config
 from logic import LogicController
+from widgets.connection_status_bar import ConnectionStatusBar
 
 # Tabs modulares
 from tabs.invoice_tab import InvoiceTab
@@ -48,6 +51,8 @@ class MainWindow(QMainWindow):
         self._init_db()
         self._setup_ui()
         self._setup_menu()
+        self._setup_connection_status()
+        self._check_online_status()
 
     def _init_db(self):
         db_path = facot_config.get_db_path()
@@ -219,3 +224,146 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(self, "Plantilla", "Plantilla guardada correctamente.")
         except Exception as e:
             QMessageBox.critical(self, "Plantilla", f"No se pudo abrir el editor de plantillas:\n{e}")
+    def _setup_connection_status(self):
+        """Configura la barra de estado de conexión."""
+        # Crear barra de estado
+        status_bar = QStatusBar()
+        self.setStatusBar(status_bar)
+        
+        # Crear widget de estado de conexión
+        self.connection_status = ConnectionStatusBar(self)
+        
+        # Configurar estado inicial (SQLite por defecto)
+        db_path = facot_config.get_db_path()
+        self.connection_status.set_mode("SQLITE", db_path)
+        
+        # Conectar señales
+        self.connection_status.database_changed.connect(self._on_database_changed)
+        self.connection_status.mode_changed.connect(self._on_connection_mode_changed)
+        
+        # Agregar a la barra de estado
+        status_bar.addPermanentWidget(self.connection_status)
+    
+    def _check_online_status(self):
+        """Verifica si hay conexión a internet."""
+        # Crear network manager
+        self.network_manager = QNetworkAccessManager(self)
+        self.network_manager.finished.connect(self._on_network_check_finished)
+        
+        # Hacer request a un servidor confiable
+        request = QNetworkRequest(QUrl("https://www.google.com"))
+        request.setTransferTimeout(3000)  # 3 segundos timeout
+        self.network_manager.get(request)
+    
+    def _on_network_check_finished(self, reply):
+        """Callback cuando se completa la verificación de red."""
+        is_online = (reply.error() == 0)
+        self.connection_status.set_online_status(is_online)
+        reply.deleteLater()
+    
+    def _on_database_changed(self, new_db_path: str):
+        """
+        Callback cuando el usuario cambia la base de datos.
+        
+        Args:
+            new_db_path: Ruta a la nueva base de datos
+        """
+        try:
+            # Actualizar configuración
+            facot_config.set_db_path(new_db_path)
+            
+            # Recrear LogicController con nueva base
+            self.logic = LogicController(new_db_path)
+            
+            # Actualizar companies
+            self._populate_companies()
+            
+            # Reinyectar lógica en tabs
+            self.invoice_tab.logic = self.logic
+            self.quotation_tab.logic = self.logic
+            self.invoice_history_tab.logic = self.logic
+            self.quotation_history_tab.logic = self.logic
+            
+            # Refrescar
+            self.invoice_tab.on_company_change()
+            self.quotation_tab.on_company_change()
+            self.invoice_history_tab.refresh()
+            self.quotation_history_tab.refresh()
+            
+            QMessageBox.information(
+                self,
+                "Base de Datos",
+                f"Base de datos cambiada exitosamente:\n{os.path.basename(new_db_path)}"
+            )
+            
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Error",
+                f"No se pudo cambiar la base de datos:\n{str(e)}"
+            )
+    
+    def _on_connection_mode_changed(self, new_mode: str):
+        """
+        Callback cuando el usuario cambia el modo de conexión.
+        
+        Args:
+            new_mode: Nuevo modo (SQLITE, FIREBASE, AUTO)
+        """
+        try:
+            from data_access import set_data_access_mode, DataAccessMode
+            
+            # Mapear string a enum
+            mode_map = {
+                "SQLITE": DataAccessMode.SQLITE,
+                "FIREBASE": DataAccessMode.FIREBASE,
+                "AUTO": DataAccessMode.AUTO
+            }
+            
+            mode = mode_map.get(new_mode.upper())
+            if mode:
+                set_data_access_mode(mode)
+                
+                QMessageBox.information(
+                    self,
+                    "Modo de Conexión",
+                    f"Modo de conexión cambiado a: {new_mode}\n\n"
+                    f"La aplicación ahora usará {new_mode} para acceder a los datos."
+                )
+                
+                # Si se cambió a Firebase o AUTO, verificar que esté configurado
+                if new_mode in ["FIREBASE", "AUTO"]:
+                    self._check_firebase_availability()
+        
+        except ImportError:
+            QMessageBox.warning(
+                self,
+                "Modo de Conexión",
+                "El módulo de Firebase no está disponible.\n"
+                "Solo se puede usar SQLite."
+            )
+    
+    def _check_firebase_availability(self):
+        """Verifica si Firebase está disponible y configurado."""
+        try:
+            from firebase import get_firebase_client
+            
+            client = get_firebase_client()
+            if not client.is_available():
+                QMessageBox.warning(
+                    self,
+                    "Firebase",
+                    "Firebase no está disponible o no está configurado correctamente.\n\n"
+                    "Verifique que:\n"
+                    "1. firebase-admin esté instalado (pip install firebase-admin)\n"
+                    "2. El archivo de credenciales exista\n"
+                    "3. Las credenciales sean válidas\n\n"
+                    "La aplicación usará SQLite como fallback."
+                )
+        except Exception as e:
+            QMessageBox.warning(
+                self,
+                "Firebase",
+                f"Error al verificar Firebase:\n{str(e)}\n\n"
+                "La aplicación usará SQLite como fallback."
+            )
