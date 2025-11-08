@@ -8,7 +8,12 @@ permitiendo cambiar entre backends sin modificar la lógica de negocio.
 from .base import DataAccess
 from .sqlite_data_access import SQLiteDataAccess
 from .firebase_data_access import FirebaseDataAccess
-from .factory import get_data_access, DataAccessMode
+from .factory import (
+    get_data_access,
+    DataAccessMode,
+    get_current_mode,
+    set_data_access_mode
+)
 
 __all__ = [
     "DataAccess",
@@ -16,4 +21,6 @@ __all__ = [
     "FirebaseDataAccess",
     "get_data_access",
     "DataAccessMode",
+    "get_current_mode",
+    "set_data_access_mode",
 ]
