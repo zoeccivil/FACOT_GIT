@@ -49,7 +49,7 @@ class HybridLogicWrapper:
     
     Intercepta llamadas de atributos y las redirige al backend correcto:
     - Si data_access tiene el método, lo usa (Firebase)
-    - Si no, delega a logic (SQLite o métodos no implementados en Firebase)
+    - Si no, delega a logic (SQLite)
     
     Esto permite que tabs existentes funcionen con ambos backends
     sin modificar su código.
@@ -310,7 +310,9 @@ class MainWindow(QMainWindow):
         """Abre el diálogo de configuración de secuencias NCF"""
         from dialogs.ncf_config_dialog import NCFConfigDialog
         
-        dialog = NCFConfigDialog(self)
+        # PASAR EL BACKEND CORRECTO (híbrido si existe)
+        backend = self.hybrid_logic if self.hybrid_logic else self.logic
+        dialog = NCFConfigDialog(backend, self)
         dialog.exec()
 
     # --------- Empresas ----------
@@ -336,6 +338,29 @@ class MainWindow(QMainWindow):
     # Helper para obtener la empresa actual desde cualquier lugar
     def get_current_company(self):
         return self.companies.get(self.company_selector.currentText())
+
+    # --- Compatibilidad: algunos diálogos llaman MainWindow.get_all_companies() ---
+    def get_all_companies(self):
+        """
+        Delegado de compatibilidad para obtener empresas desde la ventana principal.
+        Intenta híbrido, luego data_access, luego logic.
+        """
+        try:
+            if self.hybrid_logic and hasattr(self.hybrid_logic, "get_all_companies"):
+                return self.hybrid_logic.get_all_companies() or []
+        except Exception as e:
+            print(f"[MainWindow] hybrid get_all_companies error: {e}")
+        try:
+            if self.data_access and hasattr(self.data_access, "get_all_companies"):
+                return self.data_access.get_all_companies() or []
+        except Exception as e:
+            print(f"[MainWindow] data_access get_all_companies error: {e}")
+        try:
+            if self.logic and hasattr(self.logic, "get_all_companies"):
+                return self.logic.get_all_companies() or []
+        except Exception as e:
+            print(f"[MainWindow] logic get_all_companies error: {e}")
+        return []
 
     # Menú: abrir editor de plantillas para la empresa seleccionada
     def _menu_edit_template(self):

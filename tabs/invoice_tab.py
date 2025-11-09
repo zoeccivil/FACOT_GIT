@@ -1,13 +1,11 @@
 from __future__ import annotations
-from utils.app_paths import resource_path
 import os
-import datetime
 from typing import Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime as dt
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox, QLineEdit, QPushButton,
     QDateEdit, QCheckBox, QTableWidget, QTableWidgetItem, QMessageBox, QFileDialog,
-    QHeaderView, QGroupBox, QFormLayout, QDialog, QInputDialog
+    QHeaderView, QGroupBox, QGridLayout, QDialog, QInputDialog
 )
 from PyQt6.QtCore import QDate, Qt, pyqtSignal, QRegularExpression
 from PyQt6.QtGui import QRegularExpressionValidator
@@ -20,7 +18,6 @@ from utils.quotation_templates import (
 )
 
 from dialogs.item_picker_dialog import ItemPickerDialog
-    # noqa: E402
 from dialogs.template_editor_dialog import TemplateEditorDialog
 
 from utils.template_integration import (
@@ -48,41 +45,42 @@ try:
 except Exception:
     CompanyManagementWindow = None
 
-# Config para vencimientos y logos
 try:
     import config_facot
 except Exception:
     class _Cfg:
         QUOTATION_DUE_DAYS = 30
         INVOICE_DUE_DAYS = 30
-        INVOICE_FIXED_DUE_DATE = ""  # "YYYY-MM-DD"
+        INVOICE_FIXED_DUE_DATE = ""
         COMPANY_LOGOS = {}
         DEFAULT_LOGO_PATH = ""
     config_facot = _Cfg()
 
-# Mapeo de tipo de factura (invoice_category) -> prefijo NCF
 CATEGORY_TO_PREFIX = {
     "FACTURA PRIVADA": "B01",
     "FACTURA GUBERNAMENTAL": "B15",
-    "FACTURA GUBERMAMENTAL": "B15",  # tolera typo
+    "FACTURA GUBERMAMENTAL": "B15",
     "FACTURA CONSUMIDOR FINAL": "B02",
     "FACTURA EXENTA": "B14",
     "FACTURA EXENTA (REGIMEN ESPECIAL)": "B14",
     "FACTURA EXCENTA (REGIMEN ESPECIAL)": "B14",
 }
-
-# Fallback de unidad: usa el estándar de tu tabla (UND)
 DEFAULT_UNIT_FALLBACK = "UND"
 
 
 class InvoiceTab(QWidget):
+    """
+    Pestaña de Facturas:
+    - Secuencias NCF persistentes (preview vs consumo)
+    - Ítems con unidad desde maestro
+    - Exportación y vista previa
+    """
     invoice_saved = pyqtSignal(int)
 
     def __init__(self, logic, get_current_company_callable, parent=None):
         super().__init__(parent)
         self.logic = logic
         self.get_current_company = get_current_company_callable
-        # Traza para confirmar qué archivo está cargando esta clase
         try:
             print(f"[LOAD] InvoiceTab module: {__file__}")
         except Exception:
@@ -90,11 +88,10 @@ class InvoiceTab(QWidget):
         self._build_ui()
 
     # -------------------------
-    # UI
+    # UI principal
     # -------------------------
     def _build_ui(self):
         layout = QVBoxLayout(self)
-
         self.setStyleSheet("""
         QGroupBox {
             border: 1px solid #555; border-radius: 6px; margin-top: 10px;
@@ -106,34 +103,45 @@ class InvoiceTab(QWidget):
         # Barra superior
         top_btn_row = QHBoxLayout()
         self.edit_template_btn = QPushButton("Editar plantilla")
-        top_btn_row.addWidget(self.edit_template_btn)
         self.edit_template_btn.clicked.connect(self._on_edit_template)
+        top_btn_row.addWidget(self.edit_template_btn)
 
         self.edit_company_btn = QPushButton("Editar empresa")
-        top_btn_row.addWidget(self.edit_company_btn)
         self.edit_company_btn.clicked.connect(self._open_company_manager)
+        top_btn_row.addWidget(self.edit_company_btn)
 
         self.btn_next_ncf = QPushButton("Siguiente NCF")
-        self.btn_next_ncf.setToolTip("Calcular el siguiente NCF según Tipo Factura")
-        top_btn_row.addWidget(self.btn_next_ncf)
+        self.btn_next_ncf.setToolTip("Asignar y consumir el siguiente NCF real")
         self.btn_next_ncf.clicked.connect(self._on_next_ncf_clicked)
+        top_btn_row.addWidget(self.btn_next_ncf)
 
         top_btn_row.addStretch(1)
         layout.addLayout(top_btn_row)
 
         # 1. Datos de la Factura
         datos_box = QGroupBox("1. Datos de la Factura")
-        datos_form = QFormLayout(datos_box)
-        top_row = QHBoxLayout()
+        g = QGridLayout(datos_box)
+        g.setHorizontalSpacing(12)
+        g.setVerticalSpacing(8)
 
+        # Tipo de NCF
         self.ncf_type_combo = QComboBox()
-        self.ncf_type_combo.addItems(NCF_TYPES.keys())
-        self.ncf_type_combo.currentIndexChanged.connect(self._update_ncf_sequence)
+        if isinstance(NCF_TYPES, dict):
+            self._ncf_type_display_to_prefix = {}
+            for prefix, desc in NCF_TYPES.items():
+                display = desc if desc else prefix
+                self.ncf_type_combo.addItem(display)
+                self._ncf_type_display_to_prefix[display] = prefix
+        else:
+            for k in NCF_TYPES:
+                self.ncf_type_combo.addItem(k)
 
+        # NCF asignado
         self.ncf_number_edit = QLineEdit()
         self.ncf_number_edit.setClearButtonEnabled(True)
         self._setup_ncf_validator()
 
+        # Tipo/Categoría
         self.invoice_kind_combo = QComboBox()
         self.invoice_kind_combo.addItems([
             "FACTURA PRIVADA",
@@ -141,34 +149,46 @@ class InvoiceTab(QWidget):
             "FACTURA CONSUMIDOR FINAL",
             "FACTURA EXENTA",
         ])
-        self.invoice_kind_combo.currentIndexChanged.connect(self._update_ncf_sequence)
 
+        # Fecha y vencimiento
         self.invoice_date = QDateEdit(QDate.currentDate()); self.invoice_date.setCalendarPopup(True)
         self.invoice_due_date = QDateEdit(QDate.currentDate()); self.invoice_due_date.setCalendarPopup(True)
 
+        # Moneda/Tasa
         self.currency_combo = QComboBox(); self.currency_combo.addItems(["RD$", "USD", "EUR"])
-        try:
-            self.currency_combo.setCurrentText(DEFAULT_CURRENCY)
-        except Exception:
-            pass
+        try: self.currency_combo.setCurrentText(DEFAULT_CURRENCY)
+        except Exception: pass
         self.exchange_rate_edit = QLineEdit("1.00"); self.exchange_rate_edit.setVisible(False)
-        self.currency_combo.currentIndexChanged.connect(self._on_currency_change)
 
-        top_row.addWidget(QLabel("Tipo de NCF:")); top_row.addWidget(self.ncf_type_combo)
-        top_row.addWidget(QLabel("NCF Asignado:")); top_row.addWidget(self.ncf_number_edit, 1)
-        top_row.addWidget(QLabel("Tipo Factura:")); top_row.addWidget(self.invoice_kind_combo)
-        top_row.addWidget(QLabel("Fecha:")); top_row.addWidget(self.invoice_date)
-        top_row.addWidget(QLabel("Vencimiento:")); top_row.addWidget(self.invoice_due_date)
-        top_row.addWidget(QLabel("Moneda:")); top_row.addWidget(self.currency_combo)
-        top_row.addWidget(QLabel("Tasa:")); top_row.addWidget(self.exchange_rate_edit)
-        datos_form.addRow(top_row)
+        # Fila 0
+        g.addWidget(QLabel("Tipo de NCF:"), 0, 0); g.addWidget(self.ncf_type_combo, 0, 1)
+        g.addWidget(QLabel("NCF Asignado:"), 0, 2); g.addWidget(self.ncf_number_edit, 0, 3)
+        self.btn_refresh_ncf = QPushButton("↻"); self.btn_refresh_ncf.setToolTip("Mostrar el próximo NCF (preview)")
+        self.btn_refresh_ncf.clicked.connect(self._update_ncf_sequence)
+        g.addWidget(self.btn_refresh_ncf, 0, 4)
+        g.addWidget(QLabel("Tipo Factura:"), 0, 5); g.addWidget(self.invoice_kind_combo, 0, 6)
+        g.addWidget(QLabel("Fecha:"), 0, 7); g.addWidget(self.invoice_date, 0, 8)
+
+        # Fila 1
+        g.addWidget(QLabel("Vencimiento:"), 1, 0); g.addWidget(self.invoice_due_date, 1, 1)
+        g.addWidget(QLabel("Moneda:"), 1, 2); g.addWidget(self.currency_combo, 1, 3)
+        g.addWidget(QLabel("Tasa:"), 1, 4); g.addWidget(self.exchange_rate_edit, 1, 5)
+
+        # stretches
+        g.setColumnStretch(1, 2); g.setColumnStretch(3, 2); g.setColumnStretch(6, 2); g.setColumnStretch(8, 2)
         layout.addWidget(datos_box)
 
-        # 2. Datos del Cliente
+        # Conexiones
+        self.ncf_type_combo.currentIndexChanged.connect(self._update_ncf_sequence)
+        self.invoice_kind_combo.currentIndexChanged.connect(self._update_ncf_sequence)
+        self.invoice_date.dateChanged.connect(self._maybe_new_year_reset)
+        self.currency_combo.currentIndexChanged.connect(self._on_currency_change)
+
+        # 2. Cliente
         cliente_box = QGroupBox("2. Datos del Cliente")
         cliente_row = QHBoxLayout(cliente_box)
-        self.client_rnc = QLineEdit(); self.client_rnc.setPlaceholderText("Buscar RNC/Cédula…")
-        self.client_name = QLineEdit(); self.client_name.setPlaceholderText("Buscar nombre/razón social…")
+        self.client_rnc = QLineEdit(); self.client_rnc.setPlaceholderText("RNC/Cédula…")
+        self.client_name = QLineEdit(); self.client_name.setPlaceholderText("Nombre / Razón Social…")
         self.suggestion_combo = QComboBox(); self.suggestion_combo.hide(); self.suggestion_combo.setEditable(False)
         self.client_rnc.textChanged.connect(lambda: self._suggest_third_party('rnc'))
         self.client_name.textChanged.connect(lambda: self._suggest_third_party('name'))
@@ -202,18 +222,13 @@ class InvoiceTab(QWidget):
         self.subtotal_label = QLabel("Subtotal: RD$ 0.00")
         self.itbis_label = QLabel("ITBIS: RD$ 0.00")
         self.total_label = QLabel("Total: RD$ 0.00")
-        totales_row.addWidget(self.apply_itbis_checkbox)
-        totales_row.addStretch(1)
-        totales_row.addWidget(self.subtotal_label)
-        totales_row.addWidget(self.itbis_label)
-        totales_row.addWidget(self.total_label)
+        totales_row.addWidget(self.apply_itbis_checkbox); totales_row.addStretch(1)
+        totales_row.addWidget(self.subtotal_label); totales_row.addWidget(self.itbis_label); totales_row.addWidget(self.total_label)
         layout.addWidget(totales_box)
-
-        # Dentro de _build_ui(), REEMPLAZA el bloque "Botones inferiores" por este:
 
         # Botones inferiores
         btn_preview_html = QPushButton("Vista Previa / PDF")
-        btn_preview_html.setToolTip("Abrir vista previa HTML y exportar a PDF (WYSIWYG)")
+        btn_preview_html.setToolTip("Abrir vista previa HTML y exportar a PDF")
         btn_preview_html.clicked.connect(self._preview_invoice)
 
         btn_save_invoice = QPushButton("Guardar en Base de Datos")
@@ -221,22 +236,21 @@ class InvoiceTab(QWidget):
 
         layout.addWidget(btn_preview_html)
         layout.addWidget(btn_save_invoice)
-        # Política de vencimiento (facturas)
+
+        # Vencimiento inicial y NCF inicial (preview)
         self._apply_default_due_date()
         self.invoice_date.dateChanged.connect(self._on_invoice_date_changed)
-
-        # Sugerir NCF inicial
         self._update_ncf_sequence()
 
     # -------------------------
-    # Helpers NCF
+    # NCF helpers
     # -------------------------
     def _setup_ncf_validator(self):
         pattern = r"^(E[0-9]{13}|(?!E)[A-Z][0-9]{10})$"
         regex = QRegularExpression(pattern)
         self.ncf_number_edit.setValidator(QRegularExpressionValidator(regex, self.ncf_number_edit))
         self.ncf_number_edit.textEdited.connect(lambda _: self._enforce_upper(self.ncf_number_edit))
-        self.ncf_number_edit.setPlaceholderText("Formato: ETTSSSSSSSSSSS o LTTSSSSSSSS (E+13 o letra≠E+10)")
+        self.ncf_number_edit.setPlaceholderText("Formato: ETTSSSSSSSSSSS o LTTSSSSSSSS (E+13 / letra≠E+10)")
 
     def _enforce_upper(self, edit: QLineEdit):
         try:
@@ -250,34 +264,103 @@ class InvoiceTab(QWidget):
         cat = (self.invoice_kind_combo.currentText() or "").strip().upper()
         if cat in CATEGORY_TO_PREFIX:
             return CATEGORY_TO_PREFIX[cat]
-        return NCF_TYPES.get(self.ncf_type_combo.currentText(), "B01")
+        display = self.ncf_type_combo.currentText()
+        if hasattr(self, "_ncf_type_display_to_prefix"):
+            return self._ncf_type_display_to_prefix.get(display, "B01")
+        return display if len(display) == 3 else "B01"
+
+    def _dedupe_ncf(self, ncf: str, prefix3: str) -> str:
+        n = (ncf or "").upper()
+        p = (prefix3 or "").upper()
+        if len(n) >= 4 and len(p) == 3:
+            if n[0] == n[1] and n[1:].startswith(p):
+                return n[1:]
+        return n
 
     def _update_ncf_sequence(self):
+        """
+        Muestra el PRÓXIMO NCF (preview) sin consumir/incrementar.
+        """
         company = self.get_current_company()
         if not company:
-            self.ncf_number_edit.clear()
-            return
+            self.ncf_number_edit.clear(); return
         prefix3 = self._category_prefix()
+        preview = ""
         try:
-            next_ncf = self.logic.get_next_ncf(int(company['id']), prefix3)
-        except Exception:
-            next_ncf = ""
-        self.ncf_number_edit.setText(next_ncf or "")
+            if hasattr(self.logic, "get_ncf_preview"):
+                preview = self.logic.get_ncf_preview(int(company['id']), prefix3)
+            elif hasattr(self.logic, "get_next_ncf"):  # fallback histórico
+                preview = self.logic.get_next_ncf(int(company['id']), prefix3)
+        except Exception as e:
+            print(f"[NCF] Error preview: {e}")
+        preview = self._dedupe_ncf(preview, prefix3)
+        self.ncf_number_edit.setText(preview or "")
 
     def _on_next_ncf_clicked(self):
+        """
+        Consume/asigna el siguiente NCF (incrementa secuencia en BD).
+        """
         comp = self.get_current_company()
         if not comp:
-            QMessageBox.warning(self, "NCF", "Seleccione una empresa.")
-            return
+            QMessageBox.warning(self, "NCF", "Seleccione una empresa."); return
         prefix3 = self._category_prefix()
         try:
-            next_ncf = self.logic.get_next_ncf(int(comp.get("id")), prefix3)
+            if hasattr(self.logic, "allocate_next_ncf"):
+                next_ncf = self.logic.allocate_next_ncf(int(comp['id']), prefix3)
+            else:  # fallback
+                next_ncf = self.logic.get_next_ncf(int(comp['id']), prefix3)
+            next_ncf = self._dedupe_ncf(next_ncf, prefix3)
             self.ncf_number_edit.setText(next_ncf)
         except Exception as e:
-            QMessageBox.critical(self, "NCF", f"No se pudo calcular el siguiente NCF:\n{e}")
+            QMessageBox.critical(self, "NCF", f"No se pudo asignar el siguiente NCF:\n{e}")
+
+    def _maybe_new_year_reset(self):
+        self._update_ncf_sequence()
+
+    def _validate_ncf_or_warn(self) -> bool:
+        ncf = (self.ncf_number_edit.text() or "").strip().upper()
+        if not hasattr(self.logic, "validate_ncf"):
+            return True
+        if not self.logic.validate_ncf(ncf):
+            QMessageBox.critical(self, "NCF", "NCF inválido. Formatos válidos: E + 13 dígitos, o letra≠E + 10 dígitos.")
+            return False
+        return True
+
+    def _ensure_ncf_assigned_and_mark(self, company: Dict[str, Any]):
+        """
+        Garantiza que el campo tenga un NCF asignado y consumido si corresponde.
+        Regla:
+        - Si el campo está vacío → allocate_next_ncf.
+        - Si el campo coincide con el preview actual → allocate_next_ncf (para persistir consumo).
+        - Si el campo es distinto (usuario escribió uno válido), no se incrementa automáticamente.
+        """
+        if not company:
+            return None
+        prefix = self._category_prefix()
+        current = (self.ncf_number_edit.text() or "").strip().upper()
+        try:
+            if hasattr(self.logic, "get_ncf_preview"):
+                preview = self.logic.get_ncf_preview(int(company['id']), prefix)
+            else:
+                preview = self.logic.get_next_ncf(int(company['id']), prefix)
+        except Exception:
+            preview = ""
+        try:
+            if not current or (preview and current == preview):
+                if hasattr(self.logic, "allocate_next_ncf"):
+                    assigned = self.logic.allocate_next_ncf(int(company['id']), prefix)
+                else:
+                    assigned = self.logic.get_next_ncf(int(company['id']), prefix)
+                assigned = self._dedupe_ncf(assigned, prefix)
+                if assigned:
+                    self.ncf_number_edit.setText(assigned)
+                    current = assigned
+        except Exception as ex:
+            print("[InvoiceTab] _ensure_ncf_assigned_and_mark error:", ex)
+        return current
 
     # -------------------------
-    # Moneda / Fechas
+    # Moneda / fechas
     # -------------------------
     def _on_currency_change(self):
         moneda = self.currency_combo.currentText()
@@ -319,7 +402,7 @@ class InvoiceTab(QWidget):
             self.invoice_due_date.setDate(new_date.addDays(days))
 
     # -------------------------
-    # Cliente / ítems / totales
+    # Cliente / sugerencias
     # -------------------------
     def _suggest_third_party(self, search_by):
         query = self.client_rnc.text() if search_by == "rnc" else self.client_name.text()
@@ -345,6 +428,9 @@ class InvoiceTab(QWidget):
         except Exception:
             self.suggestion_combo.hide()
 
+    # -------------------------
+    # Ítems
+    # -------------------------
     def _open_item_picker(self):
         dlg = ItemPickerDialog(self, title="Agregar ítems a la Factura")
         if dlg.exec() != QDialog.DialogCode.Accepted:
@@ -374,6 +460,7 @@ class InvoiceTab(QWidget):
         self.invoice_items_table.setItem(row, 4, QTableWidgetItem(f"{float(qty):.2f}" if qty is not None else "0.00"))
         self.invoice_items_table.setItem(row, 5, QTableWidgetItem(f"{float(price):.2f}" if price is not None else "0.00"))
         self.invoice_items_table.setItem(row, 6, QTableWidgetItem(f"{float(subtotal):,.2f}"))
+        self._recalculate_invoice_totals()
 
     def _remove_invoice_item_row(self):
         r = self.invoice_items_table.currentRow()
@@ -381,15 +468,18 @@ class InvoiceTab(QWidget):
             QMessageBox.warning(self, "Sin Selección", "Selecciona un detalle para eliminar."); return
         self.invoice_items_table.removeRow(r)
         for i in range(self.invoice_items_table.rowCount()):
-            self.invoice_items_table.setItem(i, 0, QTableWidgetItem(str(i+1)))
+            self.invoice_items_table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
         self._recalculate_invoice_totals()
 
     def _recalculate_invoice_totals(self):
         subtotal = 0.0
         for r in range(self.invoice_items_table.rowCount()):
             cell = self.invoice_items_table.item(r, 6)
+            if not cell:
+                continue
+            txt = (cell.text() or "").replace(",", "").strip()
             try:
-                subtotal += float((cell.text() if cell else "0").replace(",", ""))
+                subtotal += float(txt) if txt else 0.0
             except Exception:
                 pass
         itbis = subtotal * ITBIS_RATE if self.apply_itbis_checkbox.isChecked() else 0.0
@@ -399,14 +489,65 @@ class InvoiceTab(QWidget):
         self.total_label.setText(f"Total: RD$ {total:,.2f}")
 
     # -------------------------
-    # Exportar / Preview
+    # Vista previa / exportación
     # -------------------------
+    def _preview_invoice(self):
+        company = self.get_current_company()
+        if not company:
+            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida")
+            return
+
+        print("[HIT] _preview_invoice start")
+
+        company_data, tpl = self._get_company_payload_for_preview()
+        self._ensure_ncf_assigned_and_mark(company)
+        ncf_text = (self.ncf_number_edit.text() or "").strip().upper()
+
+        items = self._collect_items_for_export()
+        if not items:
+            QMessageBox.warning(self, "Ítems", "Agrega al menos un ítem antes de previsualizar.")
+            return
+
+        invoice_data = {
+            "company_id": company_data.get('id'),
+            "number": f"INV-DRAFT-{dt.now().strftime('%y%m%d%H%M%S')}",
+            "ncf": ncf_text,
+            "date": self.invoice_date.date().toString("yyyy-MM-dd"),
+            "due_date": self.invoice_due_date.date().toString("yyyy-MM-dd"),
+            "client_name": self.client_name.text(),
+            "client_rnc": self.client_rnc.text(),
+            "currency": self.currency_combo.currentText(),
+            "exchange_rate": self._safe_float(self.exchange_rate_edit.text(), 1.0),
+            "items": items,
+            "notes": "",
+            "invoice_category": self.invoice_kind_combo.currentText(),
+            "type": self.invoice_kind_combo.currentText(),
+            "apply_itbis": self.apply_itbis_checkbox.isChecked(),
+        }
+        invoice_data["display_number"] = self._build_display_invoice_number(company_data, ncf_text, prefix_label="FACT", last_digits=6)
+
+        template_path = os.path.join(get_data_root(), "templates", "quotation_template.html")
+
+        if InvoicePreviewDialog is None:
+            QMessageBox.critical(self, "Vista Previa", "InvoicePreviewDialog no está disponible.")
+            return
+
+        dlg = InvoicePreviewDialog(
+            company=company_data,
+            template=tpl,
+            invoice=invoice_data,
+            parent=self,
+            template_path=template_path,
+            debug=False
+        )
+        dlg.exec()
+
     def _generate_invoice_excel(self):
         company = self.get_current_company()
         if not company:
-            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida"); return
+            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida")
+            return
 
-        # Usa la misma colección robusta (si tu template Excel la aprovecha)
         items_for_export = []
         for r in range(self.invoice_items_table.rowCount()):
             desc = self.invoice_items_table.item(r, 2)
@@ -439,7 +580,8 @@ class InvoiceTab(QWidget):
     def _generate_invoice_pdf(self):
         company = self.get_current_company()
         if not company:
-            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida"); return
+            QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida")
+            return
 
         items_for_export = []
         for r in range(self.invoice_items_table.rowCount()):
@@ -470,6 +612,9 @@ class InvoiceTab(QWidget):
             self._ensure_ncf_assigned_and_mark(company)
             generate_invoice_pdf(data, items_for_export, save_path, company.get('name', ''))
 
+    # -------------------------
+    # Utilidades numéricas / texto
+    # -------------------------
     def _safe_float(self, txt: str, default: float = 0.0) -> float:
         try:
             return float((txt or "").replace(",", "").strip())
@@ -489,7 +634,9 @@ class InvoiceTab(QWidget):
             pass
         return ""
 
-    # ---- Empresa / payload preview (firma, dirección, logo) ----
+    # -------------------------
+    # Empresa / payload para preview
+    # -------------------------
     def _company_display_address(self, details: Dict[str, Any], company_fallback: Dict[str, Any]) -> str:
         a1 = (details.get("address_line1") or company_fallback.get("address_line1") or "").strip()
         a2 = (details.get("address_line2") or company_fallback.get("address_line2") or "").strip()
@@ -510,37 +657,23 @@ class InvoiceTab(QWidget):
         return resolve_logo_uri(cand) or ""
 
     def _get_company_payload_for_preview(self):
-        """
-        Carga datos completos de la empresa desde la BD para el preview (firma, dirección, contacto, logo).
-        Siempre prioriza los campos de logic.get_company_details(company_id).
-        """
-        try:
-            import inspect
-            print(f"[WHERE] _get_company_payload_for_preview at {inspect.getsourcefile(self._get_company_payload_for_preview)}:{self._get_company_payload_for_preview.__code__.co_firstlineno}")
-        except Exception:
-            pass
-
         company_min = self.get_current_company() or {}
         company_id = company_min.get("id")
-
         if not company_id:
             print("[InvoiceTab] ERROR: No se pudo obtener company_id")
             return {}, {}
 
-        # Consultar SIEMPRE la BD
         details = {}
         try:
             if hasattr(self.logic, "get_company_details"):
                 details = self.logic.get_company_details(company_id) or {}
-                print(f"[InvoiceTab] get_company_details({company_id}) returned: {details}")
             else:
-                print("[InvoiceTab] ERROR: self.logic no tiene el método get_company_details")
+                print("[InvoiceTab] ERROR: self.logic no tiene get_company_details")
         except Exception as e:
             print(f"[InvoiceTab] ERROR en get_company_details: {e}")
             details = {}
 
         if not details:
-            print("[InvoiceTab] WARNING: get_company_details devolvió vacío, usando company_min como fallback")
             details = company_min
 
         a1 = (details.get("address_line1") or "").strip()
@@ -554,13 +687,6 @@ class InvoiceTab(QWidget):
         signature = (details.get("signature_name") or "").strip()
         logo_rel = (details.get("logo_path") or "").strip()
 
-        # Prints específicos de LOGO: qué viene y qué mandamos
-        print("\n[INV-LOGO] InvoiceTab._get_company_payload_for_preview()")
-        print(f"  company_id={company_id}")
-        print(f"  details.logo_path='{details.get('logo_path')}'")
-        print(f"  company_min.logo_path='{company_min.get('logo_path')}'")
-        print(f"  -> payload.logo_path (raw, sin file:/// aún)='{logo_rel}'\n")
-
         payload = {
             "id": company_id,
             "name": details.get("name") or company_min.get("name", ""),
@@ -573,262 +699,32 @@ class InvoiceTab(QWidget):
             "signature_name": signature,
             "authorized_name": signature,
             "logo_path": logo_rel,
-            "invoice_due_date": (details.get("invoice_due_date") or "").strip(),  # <- importante
+            "invoice_due_date": (details.get("invoice_due_date") or "").strip(),
         }
 
-        # Prefill del widget con la fecha fija de la empresa si existe
         try:
             self._set_invoice_due_date_widget(payload.get("invoice_due_date") or "")
         except Exception:
             pass
-        # Cargar plantilla (template) de la empresa
+
         tpl = {}
         try:
             tpl = load_template(int(company_id)) or {}
         except Exception as e:
             print(f"[InvoiceTab] ERROR al cargar template: {e}")
             tpl = {}
-
-        print(f"[InvoiceTab] company_payload_for_preview FINAL: {payload}")
         return payload, tpl
-  
-    def _preview_invoice(self):
-            # Asegúrate de importar esto en la parte superior del archivo invoice_tab.py:
-            # from utils.app_paths import get_resource_path as resource_path
-            
-            company = self.get_current_company()
-            if not company:
-                QMessageBox.warning(self, "Empresa", "Seleccione una empresa válida")
-                return
-
-            print("[HIT] _preview_invoice start")
-
-            # 1. Obtener data completa de la empresa y template (sin fallbacks redundantes aquí)
-            company_data, tpl = self._get_company_payload_for_preview()
-
-            self._ensure_ncf_assigned_and_mark(company)
-            ncf_text = (self.ncf_number_edit.text() or "").strip().upper()
-
-            # 2. Recolectar ítems
-            items = self._collect_items_for_export()
-            
-            if not items:
-                QMessageBox.warning(self, "Ítems", "Agrega al menos un ítem a la factura antes de previsualizar.")
-                return
-                
-            # 3. Construir el Payload FINAL (Factura)
-            invoice_data = {
-                "company_id": company_data.get('id'),
-                "number": f"INV-DRAFT-{datetime.datetime.now().strftime('%y%m%d%H%M%S')}",
-                "ncf": ncf_text,
-                "date": self.invoice_date.date().toString("yyyy-MM-dd"),
-                "due_date": self.invoice_due_date.date().toString("yyyy-MM-dd"),
-                "client_name": self.client_name.text(),
-                "client_rnc": self.client_rnc.text(),
-                "currency": self.currency_combo.currentText(),
-                "exchange_rate": self._safe_float(self.exchange_rate_edit.text(), 1.0),
-                "items": items,
-                "notes": self._safe_text_attr("notes_edit"),
-                "invoice_category": self.invoice_kind_combo.currentText(),
-                "type": self.invoice_kind_combo.currentText(),
-                "apply_itbis": self.apply_itbis_checkbox.isChecked(),  # ✅ AÑADIR ESTA LÍNEA
-            }
-            
-            invoice_data["display_number"] = self._build_display_invoice_number(company_data, ncf_text, prefix_label="FACT", last_digits=6)
-            
-            print(f"[ITAB-DUE] PREVIEW payload due={invoice_data.get('due_date')} display_number={invoice_data.get('display_number')}")
-            
-            # 4. Carga la ruta del template usando el helper de PyInstaller (resource_path)
-            # Usaremos el template de cotización unificado (si renombraste invoice_template.html a quotation_template.html para unificar)
-            template_path = resource_path("templates", "quotation_template.html") # <--- USAR EL TEMPLATE UNIFICADO
-            
-            if InvoicePreviewDialog is None:
-                QMessageBox.critical(self, "Vista Previa", "InvoicePreviewDialog no está disponible.")
-                return
-
-            print("[DEBUG] injected objects:", {"COMPANY": company_data, "TEMPLATE": tpl, "INVOICE": invoice_data})
-
-            # 5. Abrir diálogo
-            dlg = InvoicePreviewDialog(company=company_data, template=tpl, invoice=invoice_data, parent=self, template_path=template_path, debug=False)
-            dlg.exec()
-    # -------------------------
-    # Unidad: helpers con trazas
-    # -------------------------
-    def _normalize_name(self, s: str) -> str:
-        try:
-            self._dbg_origin(self._normalize_name, "normalize_name")
-        except Exception:
-            pass
-        print("[HIT] _normalize_name")
-        s = (s or "").strip().upper()
-        return " ".join(s.split())
-
-    def _lookup_unit_by_code_or_name(self, code: str, name: str) -> str:
-        try:
-            self._dbg_origin(self._lookup_unit_by_code_or_name, "lookup_unit")
-        except Exception:
-            pass
-        print(f"[HIT] _lookup_unit_by_code_or_name code='{code}' name='{name}'")
-
-        if code and hasattr(self.logic, "get_item_by_code"):
-            try:
-                found = self.logic.get_item_by_code(code) or {}
-                u = (found.get("unit") or "").strip()
-                print("[HIT] get_item_by_code ->", found)
-                if u:
-                    return u
-            except Exception as e:
-                print("[InvoiceTab] get_item_by_code error:", e)
-
-        if name and hasattr(self.logic, "get_items_like"):
-            try:
-                target = self._normalize_name(name)
-                cands = self.logic.get_items_like(name, limit=25) or []
-                print(f"[HIT] get_items_like count={len(cands)} first5={[c.get('name') for c in cands[:5]]}")
-                for c in cands:
-                    if self._normalize_name(c.get("name")) == target:
-                        u = (c.get("unit") or "").strip()
-                        if u:
-                            return u
-            except Exception as e:
-                print("[InvoiceTab] get_items_like error:", e)
-
-        return ""
-
-    def _collect_items_for_export(self):
-        try:
-            self._dbg_origin(self._collect_items_for_export, "items")
-        except Exception:
-            pass
-        print("[HIT] _collect_items_for_export")
-
-        items: List[Dict[str, Any]] = []
-        for r in range(self.invoice_items_table.rowCount()):
-            code_item = self.invoice_items_table.item(r, 1)
-            desc_item = self.invoice_items_table.item(r, 2)
-            unit_item = self.invoice_items_table.item(r, 3)
-            qty_item  = self.invoice_items_table.item(r, 4)
-            price_item= self.invoice_items_table.item(r, 5)
-
-            code = (code_item.text().strip() if code_item and code_item.text() else "")
-            desc = (desc_item.text().strip() if desc_item and desc_item.text() else "")
-            unit = (unit_item.text().strip() if unit_item and unit_item.text() else "")
-
-            try:
-                qty = float((qty_item.text() if qty_item else "0").replace(",", "").strip() or 0)
-            except Exception:
-                qty = 0.0
-            try:
-                price = float((price_item.text() if price_item else "0").replace(",", "").strip() or 0)
-            except Exception:
-                price = 0.0
-
-            # CLAVE: PRIORIDAD AL MAESTRO
-            unit_from_master = self._lookup_unit_by_code_or_name(code, desc)
-            resolved_unit = unit_from_master or unit or DEFAULT_UNIT_FALLBACK
-            if resolved_unit != unit:
-                try:
-                    self.invoice_items_table.setItem(r, 3, QTableWidgetItem(resolved_unit))
-                except Exception:
-                    pass
-
-            print(f"[HIT] item row={r} code='{code}' name='{desc}' unit_master='{unit_from_master}' unit_before='{unit}' unit_after='{resolved_unit}'")
-
-            items.append({
-                "code": code,
-                "description": desc,
-                "unit": resolved_unit,
-                "quantity": qty,
-                "unit_price": price,
-            })
-        return items
-    # -------------------------
-    # Empresa / plantillas
-    # -------------------------
-    def _on_edit_template(self):
-        try:
-            company = self.get_current_company()
-        except Exception:
-            company = None
-        if not company:
-            QMessageBox.warning(self, "Plantilla", "Seleccione primero una empresa válida.")
-            return
-        company_id = company.get("id") or company.get("company_id") or company.get("pk")
-        if not company_id:
-            QMessageBox.warning(self, "Plantilla", "La empresa seleccionada no tiene identificador.")
-            return
-        try:
-            dlg = TemplateEditorDialog(company_id=company_id, parent=self)
-            if dlg.exec():
-                QMessageBox.information(self, "Plantilla", "Plantilla guardada correctamente.")
-        except Exception as e:
-            QMessageBox.critical(self, "Plantilla", f"No se pudo abrir el editor de plantillas:\n{e}")
-
-    def _open_company_manager(self):
-        if CompanyManagementWindow is None:
-            QMessageBox.warning(self, "Empresas", "No se encontró dialogs/company_management_window.py")
-            return
-        try:
-            dlg = CompanyManagementWindow(parent=self, logic_controller=self.logic)
-            dlg.exec()
-        except Exception as e:
-            QMessageBox.critical(self, "Empresas", f"No se pudo abrir el editor de empresas:\n{e}")
-            return
-        self._notify_companies_changed()
-        try:
-            self.on_company_change()
-        except Exception:
-            self._update_ncf_sequence()
-
-    def _notify_companies_changed(self):
-        p = self.parent(); safety = 0
-        while p is not None and safety < 10:
-            if hasattr(p, "_populate_companies"):
-                try:
-                    p._populate_companies()
-                except Exception:
-                    pass
-                break
-            p = p.parent(); safety += 1
 
     # -------------------------
-    # Guardar
+    # Guardar factura
     # -------------------------
-    def _validate_ncf_or_warn(self) -> bool:
-        ncf = (self.ncf_number_edit.text() or "").strip().upper()
-        if not self.logic.validate_ncf(ncf):
-            QMessageBox.critical(self, "NCF", "NCF inválido. Formatos válidos: E + 13 dígitos, o letra≠E + 10 dígitos.")
-            return False
-        return True
-
-    def _ensure_ncf_assigned_and_mark(self, company: Dict[str, Any]):
-        if not company:
-            return None
-        current = (self.ncf_number_edit.text() or "").strip()
-        prefix = self._category_prefix()
-        assigned = current
-        try:
-            if not current:
-                if hasattr(self.logic, "get_next_ncf"):
-                    assigned = self.logic.get_next_ncf(int(company['id']), prefix)
-                    if assigned:
-                        self.ncf_number_edit.setText(assigned)
-                else:
-                    assigned = ""
-            if assigned and hasattr(self.logic, "mark_ncf_used"):
-                try:
-                    self.logic.mark_ncf_used(int(company['id']), assigned)
-                except Exception:
-                    pass
-            elif assigned and hasattr(self.logic, "reserve_ncf"):
-                try:
-                    self.logic.reserve_ncf(int(company['id']), assigned)
-                except Exception:
-                    pass
-            return assigned
-        except Exception as ex:
-            print("[InvoiceTab] _ensure_ncf_assigned_and_mark error:", ex)
-            return assigned
+    def _build_display_invoice_number(self, company: Dict[str, Any], ncf: str, prefix_label: str = "FACT", last_digits: int = 6) -> str:
+        initials = self._company_initials(company.get('name', 'COMPANY'))
+        digits = ''.join(ch for ch in (ncf or "") if ch.isdigit())
+        tail = digits[-last_digits:] if digits else ''
+        if tail:
+            return f"{prefix_label}-{initials}-{tail}"
+        return f"{prefix_label}-{initials}-{ncf or ''}"
 
     def _company_initials(self, company_name: str, max_chars: int = 6) -> str:
         if not company_name:
@@ -839,14 +735,6 @@ class InvoiceTab(QWidget):
             return ''.join([c for c in s if c.isalnum()])[:max_chars]
         initials = ''.join([p[0].upper() for p in parts[:3]])
         return initials[:max_chars]
-
-    def _build_display_invoice_number(self, company: Dict[str, Any], ncf: str, prefix_label: str = "FACT", last_digits: int = 6) -> str:
-        initials = self._company_initials(company.get('name', 'COMPANY'))
-        digits = ''.join(ch for ch in (ncf or "") if ch.isdigit())
-        tail = digits[-last_digits:] if digits else ''
-        if tail:
-            return f"{prefix_label}-{initials}-{tail}"
-        return f"{prefix_label}-{initials}-{ncf or ''}"
 
     def _save_invoice(self):
         if not self._validate_ncf_or_warn():
@@ -870,21 +758,27 @@ class InvoiceTab(QWidget):
         items = self._collect_items_for_export()
         subtotal = 0.0
         for it in items:
-            try:
-                subtotal += (it.get('quantity', 0.0) or 0.0) * (it.get('unit_price', 0.0) or 0.0)
-            except Exception:
-                pass
+            try: subtotal += (it.get('quantity', 0.0) or 0.0) * (it.get('unit_price', 0.0) or 0.0)
+            except Exception: pass
 
         itbis = subtotal * ITBIS_RATE if self.apply_itbis_checkbox.isChecked() else 0.0
         total = subtotal + itbis
         total_rd = total * tasa
+
+        # Asegurar consumo si el campo está vacío o igual al preview
+        self._ensure_ncf_assigned_and_mark(company)
+
+        # Dedup antes de guardar
+        raw_ncf = (self.ncf_number_edit.text() or "").strip().upper()
+        prefix3 = self._category_prefix()
+        invoice_number = self._dedupe_ncf(raw_ncf, prefix3)
 
         payload = {
             "company_id": int(company['id']),
             "invoice_type": "emitida",
             "invoice_category": self.invoice_kind_combo.currentText(),
             "invoice_date": self.invoice_date.date().toString("yyyy-MM-dd"),
-            "invoice_number": (self.ncf_number_edit.text() or "").strip().upper(),
+            "invoice_number": invoice_number,
             "third_party_name": cliente_nombre,
             "rnc": cliente_rnc,
             "currency": moneda,
@@ -895,8 +789,6 @@ class InvoiceTab(QWidget):
             "excel_path": "",
             "pdf_path": "",
         }
-
-        self._ensure_ncf_assigned_and_mark(company)
 
         invoice_id = self.logic.add_invoice(payload, items)
         QMessageBox.information(self, "Factura", f"Factura creada (ID: {invoice_id})")
@@ -916,44 +808,74 @@ class InvoiceTab(QWidget):
         self.total_label.setText("Total: RD$ 0.00")
 
     def on_company_change(self):
-        try:
-            self.suggestion_combo.hide()
-        except Exception:
-            pass
+        try: self.suggestion_combo.hide()
+        except Exception: pass
         self._clear_invoice_form()
         self._apply_default_due_date()
         self._update_ncf_sequence()
 
-    # Helper para ver el origen de los métodos activos
-    def _dbg_origin(self, fn, tag=""):
-        try:
-            import inspect, sys
-            mod = sys.modules.get(fn.__module__)
-            mod_path = getattr(mod, "__file__", "(sin __file__)")
-            print(f"[WHERE] {tag} -> {fn.__name__} defined at {inspect.getsourcefile(fn)}:{fn.__code__.co_firstlineno} | module={mod_path}")
-        except Exception as e:
-            print(f"[WHERE] {tag} -> {fn} (no inspect) err={e}")
-
-    def _qdate_to_str(self, qdate) -> str:
-        try:
-            return f"{qdate.year():04d}-{qdate.month():02d}-{qdate.day():02d}"
-        except Exception:
-            return ""
-
+    # -------------------------
+    # Direcciones / vencimiento fijo
+    # -------------------------
     def _compute_invoice_due_date(self, company_payload: dict, invoice_date_str: str) -> str:
         due = (company_payload or {}).get("invoice_due_date") or ""
-        print(f"[ITAB-DUE] company.fixed='{due}' invoice_date='{invoice_date_str}'")
         return (due or "").strip()
 
     def _set_invoice_due_date_widget(self, due_str: str) -> None:
-        """Setea el QDateEdit de vencimiento si existe y viene la fecha fija de empresa."""
         try:
-            if not hasattr(self, "invoice_due_date"):
-                return
-            if not due_str:
-                return
+            if not due_str: return
             y, m, d = [int(x) for x in due_str[:10].split("-")]
             self.invoice_due_date.setDate(QDate(y, m, d))
             print(f"[ITAB-DUE] Prefill widget invoice_due_date <- {due_str}")
         except Exception as e:
             print(f"[ITAB-DUE] error prefill widget: {e}")
+
+    # -------------------------
+    # Empresa / plantillas / gestión
+    # -------------------------
+    def _on_edit_template(self):
+        company = None
+        try: company = self.get_current_company()
+        except Exception: pass
+        if not company:
+            QMessageBox.warning(self, "Plantilla", "Seleccione primero una empresa válida.")
+            return
+        company_id = (company.get("id") or company.get("company_id") or company.get("pk"))
+        if not company_id:
+            QMessageBox.warning(self, "Plantilla", "Empresa sin identificador."); return
+        if TemplateEditorDialog is None:
+            QMessageBox.critical(self, "Plantilla", "TemplateEditorDialog no disponible."); return
+        try:
+            dlg = TemplateEditorDialog(company_id=company_id, parent=self)
+            if dlg.exec():
+                QMessageBox.information(self, "Plantilla", "Plantilla guardada correctamente.")
+        except Exception as e:
+            QMessageBox.critical(self, "Plantilla", f"No se pudo abrir el editor:\n{e}")
+
+    def _open_company_manager(self):
+        if CompanyManagementWindow is None:
+            QMessageBox.warning(self, "Empresas", "No se encontró CompanyManagementWindow."); return
+        try:
+            dlg = CompanyManagementWindow(parent=self, logic_controller=self.logic)
+            dlg.exec()
+        except TypeError:
+            try:
+                dlg = CompanyManagementWindow(self, self.logic); dlg.exec()
+            except Exception as e:
+                QMessageBox.critical(self, "Empresas", f"No se pudo abrir gestión de empresas:\n{e}")
+                return
+        except Exception as e:
+            QMessageBox.critical(self, "Empresas", f"No se pudo abrir gestión de empresas:\n{e}")
+            return
+        self._notify_companies_changed()
+        try: self.on_company_change()
+        except Exception: self._update_ncf_sequence()
+
+    def _notify_companies_changed(self):
+        p = self.parent(); safety = 0
+        while p is not None and safety < 12:
+            if hasattr(p, "_populate_companies"):
+                try: p._populate_companies()
+                except Exception: pass
+                break
+            p = p.parent(); safety += 1
