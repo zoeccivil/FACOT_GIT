@@ -38,6 +38,7 @@ Thumbs.db
 *.db-journal
 *.db-wal
 *.db-shm
+*.db.backup.*
 
 # Logs
 *.log
@@ -62,3 +63,15 @@ facot_config.json
 
 # Debug files
 debug_*.html
+
+# Test coverage
+.coverage
+coverage.xml
+htmlcov/
+.pytest_cache/
+
+# Environment
+.env
+.venv
+env/
+venv/

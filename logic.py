@@ -5,7 +5,11 @@ import datetime
 import re
 
 import config_facot
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+# Importar servicios de auditoría y NCF
+from services.audit_service import AuditService
+from services.ncf_service import NCFService
 
 # NCF válido:
 # - Estándar (no E): 1 letra distinta de E + 10 dígitos
@@ -28,6 +32,10 @@ class LogicController:
         print(f"[DEBUG-LOGIC] Path de la BD: {self.db_path}")
         self._connect()
         self._initialize_db()
+        
+        # Inicializar servicios de auditoría y NCF
+        self.audit_service = AuditService(db_path)
+        self.ncf_service = NCFService(db_path)
 
     # -------------------------
     # Bootstrap / DB
@@ -455,11 +463,25 @@ class LogicController:
         return f"{p3}{start_seq:0{pad}d}"
 
     def update_invoice_number(self, invoice_id: int, company_id: int, rnc: str, new_ncf: str):
+        """
+        Actualiza el número de NCF de una factura.
+        
+        INTEGRACIÓN: Registra el cambio en auditoría.
+        """
         n = (new_ncf or "").strip().upper()
         if not self.validate_ncf(n):
             return False, "NCF inválido. Formatos válidos: E + 13 dígitos, o letra≠E + 10 dígitos.", n
 
         cur = self.conn.cursor()
+        
+        # NUEVO: Obtener NCF anterior para auditoría
+        try:
+            cur.execute("SELECT invoice_number FROM invoices WHERE id = ?", (invoice_id,))
+            old_row = cur.fetchone()
+            old_ncf = old_row['invoice_number'] if old_row else None
+        except Exception:
+            old_ncf = None
+        
         cur.execute("SELECT id FROM invoices WHERE company_id=? AND invoice_number=? LIMIT 1", (company_id, n))
         row = cur.fetchone()
         if row and row["id"] != invoice_id:
@@ -473,6 +495,21 @@ class LogicController:
 
         cur.execute("UPDATE invoices SET invoice_number=? WHERE id=?", (n, invoice_id))
         self.conn.commit()
+        
+        # NUEVO: Registrar cambio de NCF en auditoría
+        try:
+            if old_ncf and old_ncf != n:
+                self.audit_service.log_action(
+                    entity_type='invoice',
+                    entity_id=invoice_id,
+                    action='update',
+                    payload_before={'invoice_number': old_ncf},
+                    payload_after={'invoice_number': n},
+                    user=os.getenv('USER', 'system')
+                )
+        except Exception as e:
+            print(f"[DEBUG-LOGIC] Error al registrar auditoría de NCF: {e}")
+        
         return True, "NCF actualizado.", n
 
     @staticmethod
@@ -510,6 +547,9 @@ class LogicController:
           1) invoice_data['due_date'] si viene
           2) companies.invoice_due_date
           3) ''
+        
+        INTEGRACIÓN: Usa NCFService para reservar NCF de forma segura
+        y AuditService para registrar la creación.
         """
         cur = self.conn.cursor()
         inv_type = (invoice_data.get('invoice_type') or 'emitida')
@@ -520,6 +560,22 @@ class LogicController:
         if not due_date:
             due_date = self.get_company_invoice_due_date(company_id) or ""
 
+        # NUEVO: Reservar NCF de forma segura si es factura emitida y no tiene NCF asignado
+        invoice_number = invoice_data.get('invoice_number', '').strip()
+        if inv_type == 'emitida' and not invoice_number:
+            invoice_category = invoice_data.get('invoice_category', 'B01')
+            success, result = self.ncf_service.reserve_ncf(company_id, invoice_category)
+            if not success:
+                # Error al reservar NCF
+                raise Exception(f"Error al reservar NCF: {result}")
+            invoice_number = result
+            print(f"[DEBUG-LOGIC] NCF reservado: {invoice_number}")
+        
+        # Actualizar invoice_data con el NCF reservado
+        invoice_data_copy = invoice_data.copy()
+        if invoice_number:
+            invoice_data_copy['invoice_number'] = invoice_number
+
         # Cabecera
         cur.execute("""
             INSERT INTO invoices (company_id, invoice_type, invoice_date, imputation_date, invoice_number,
@@ -529,22 +585,22 @@ class LogicController:
         """, (
             company_id,
             inv_type,
-            invoice_data.get('invoice_date'),
-            invoice_data.get('imputation_date'),
-            invoice_data.get('invoice_number'),
-            invoice_data.get('invoice_category'),
-            invoice_data.get('rnc'),
-            invoice_data.get('third_party_name'),
-            invoice_data.get('client_name'),
-            invoice_data.get('client_rnc'),
-            invoice_data.get('currency'),
-            float(invoice_data.get('itbis', 0.0) or 0.0),
-            float(invoice_data.get('total_amount', 0.0) or 0.0),
-            float(invoice_data.get('exchange_rate', 1.0) or 1.0),
-            float(invoice_data.get('total_amount_rd', 0.0) or 0.0),
-            invoice_data.get('excel_path', ''),
-            invoice_data.get('pdf_path', ''),
-            invoice_data.get('attachment_path', ''),
+            invoice_data_copy.get('invoice_date'),
+            invoice_data_copy.get('imputation_date'),
+            invoice_data_copy.get('invoice_number'),
+            invoice_data_copy.get('invoice_category'),
+            invoice_data_copy.get('rnc'),
+            invoice_data_copy.get('third_party_name'),
+            invoice_data_copy.get('client_name'),
+            invoice_data_copy.get('client_rnc'),
+            invoice_data_copy.get('currency'),
+            float(invoice_data_copy.get('itbis', 0.0) or 0.0),
+            float(invoice_data_copy.get('total_amount', 0.0) or 0.0),
+            float(invoice_data_copy.get('exchange_rate', 1.0) or 1.0),
+            float(invoice_data_copy.get('total_amount_rd', 0.0) or 0.0),
+            invoice_data_copy.get('excel_path', ''),
+            invoice_data_copy.get('pdf_path', ''),
+            invoice_data_copy.get('attachment_path', ''),
             due_date or None
         ))
         invoice_id = cur.lastrowid
@@ -563,6 +619,128 @@ class LogicController:
             """, (invoice_id, code, desc, qty, up, unit_from_master))
 
         self.conn.commit()
+        
+        # NUEVO: Registrar en auditoría
+        try:
+            self.audit_service.log_invoice_create(
+                invoice_id, 
+                invoice_data_copy,
+                user=os.getenv('USER', 'system')
+            )
+            
+            # Registrar asignación de NCF si aplica
+            if inv_type == 'emitida' and invoice_number:
+                self.audit_service.log_ncf_assignment(
+                    invoice_id,
+                    invoice_number,
+                    company_id,
+                    user=os.getenv('USER', 'system')
+                )
+        except Exception as e:
+            print(f"[DEBUG-LOGIC] Error al registrar auditoría: {e}")
+        
+        return invoice_id
+
+    def update_invoice(self, invoice_id: int, invoice_data: Dict[str, Any], items: List[Dict[str, Any]]):
+        """
+        Actualiza una factura existente y sus items.
+        
+        INTEGRACIÓN: Registra los cambios en auditoría antes de actualizar.
+        """
+        cur = self.conn.cursor()
+        
+        # NUEVO: Obtener datos anteriores para auditoría
+        payload_before = None
+        try:
+            cur.execute("SELECT * FROM invoices WHERE id = ?", (invoice_id,))
+            row = cur.fetchone()
+            if row:
+                payload_before = dict(row)
+        except Exception as e:
+            print(f"[DEBUG-LOGIC] Error al obtener invoice anterior: {e}")
+        
+        # Resolver due_date
+        company_id = int(invoice_data.get('company_id', payload_before.get('company_id', 0)))
+        due_date = (invoice_data.get('due_date') or "").strip()
+        if not due_date and payload_before:
+            due_date = payload_before.get('due_date', '')
+        if not due_date:
+            due_date = self.get_company_invoice_due_date(company_id) or ""
+        
+        # Actualizar cabecera de factura
+        cur.execute("""
+            UPDATE invoices SET
+                company_id = ?,
+                invoice_type = ?,
+                invoice_date = ?,
+                imputation_date = ?,
+                invoice_number = ?,
+                invoice_category = ?,
+                rnc = ?,
+                third_party_name = ?,
+                client_name = ?,
+                client_rnc = ?,
+                currency = ?,
+                itbis = ?,
+                total_amount = ?,
+                exchange_rate = ?,
+                total_amount_rd = ?,
+                excel_path = ?,
+                pdf_path = ?,
+                attachment_path = ?,
+                due_date = ?
+            WHERE id = ?
+        """, (
+            company_id,
+            invoice_data.get('invoice_type', 'emitida'),
+            invoice_data.get('invoice_date'),
+            invoice_data.get('imputation_date'),
+            invoice_data.get('invoice_number'),
+            invoice_data.get('invoice_category'),
+            invoice_data.get('rnc'),
+            invoice_data.get('third_party_name'),
+            invoice_data.get('client_name'),
+            invoice_data.get('client_rnc'),
+            invoice_data.get('currency'),
+            float(invoice_data.get('itbis', 0.0) or 0.0),
+            float(invoice_data.get('total_amount', 0.0) or 0.0),
+            float(invoice_data.get('exchange_rate', 1.0) or 1.0),
+            float(invoice_data.get('total_amount_rd', 0.0) or 0.0),
+            invoice_data.get('excel_path', ''),
+            invoice_data.get('pdf_path', ''),
+            invoice_data.get('attachment_path', ''),
+            due_date or None,
+            invoice_id
+        ))
+        
+        # Eliminar items anteriores y crear nuevos
+        cur.execute("DELETE FROM invoice_items WHERE invoice_id = ?", (invoice_id,))
+        
+        for it in items or []:
+            code = (it.get('code') or it.get('item_code') or '').strip()
+            desc = (it.get('description') or '').strip()
+            qty = float(it.get('quantity', 0.0) or 0.0)
+            up = float(it.get('unit_price', 0.0) or 0.0)
+            unit_from_master = self._get_unit_from_items(code, desc) or None
+            
+            cur.execute("""
+                INSERT INTO invoice_items (invoice_id, item_code, description, quantity, unit_price, unit)
+                VALUES (?, ?, ?, ?, ?, ?)
+            """, (invoice_id, code, desc, qty, up, unit_from_master))
+        
+        self.conn.commit()
+        
+        # NUEVO: Registrar en auditoría
+        try:
+            self.audit_service.log_invoice_update(
+                invoice_id,
+                payload_before or {},
+                invoice_data,
+                user=os.getenv('USER', 'system')
+            )
+        except Exception as e:
+            print(f"[DEBUG-LOGIC] Error al registrar auditoría de actualización: {e}")
+        
         return invoice_id
 
     def get_facturas(self, company_id, only_issued: bool = True):
@@ -605,7 +783,29 @@ class LogicController:
         return out
 
     def delete_factura(self, factura_id):
+        """
+        Elimina una factura y sus items.
+        
+        INTEGRACIÓN: Registra la eliminación en auditoría antes de borrar.
+        """
         cur = self.conn.cursor()
+        
+        # NUEVO: Obtener datos de la factura antes de eliminar para auditoría
+        try:
+            cur.execute("SELECT * FROM invoices WHERE id = ?", (factura_id,))
+            invoice_row = cur.fetchone()
+            if invoice_row:
+                invoice_data = dict(invoice_row)
+                # Registrar eliminación en auditoría
+                self.audit_service.log_invoice_delete(
+                    factura_id,
+                    invoice_data,
+                    user=os.getenv('USER', 'system')
+                )
+        except Exception as e:
+            print(f"[DEBUG-LOGIC] Error al registrar auditoría de eliminación: {e}")
+        
+        # Eliminar factura e items
         cur.execute("DELETE FROM invoice_items WHERE invoice_id = ?", (factura_id,))
         cur.execute("DELETE FROM invoices WHERE id = ?", (factura_id,))
         self.conn.commit()

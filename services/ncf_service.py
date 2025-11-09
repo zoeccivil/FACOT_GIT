@@ -24,6 +24,20 @@ class NCFService:
             db_path: Ruta a la base de datos
         """
         self.db_path = db_path
+        self._ensure_ncf_sequences_table()
+    
+    def _ensure_ncf_sequences_table(self):
+        """Crea la tabla ncf_sequences si no existe."""
+        with sqlite3.connect(self.db_path) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS ncf_sequences (
+                    company_id INTEGER NOT NULL,
+                    prefix3 TEXT NOT NULL,
+                    last_seq INTEGER NOT NULL DEFAULT 0,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (company_id, prefix3)
+                )
+            """)
     
     def reserve_ncf(
         self,
@@ -54,42 +68,79 @@ class NCFService:
         try:
             # Conectar con timeout
             conn = sqlite3.connect(self.db_path, timeout=timeout)
+            conn.row_factory = sqlite3.Row
             
             # Iniciar transacción EXCLUSIVA
             # Esto bloquea la BD para escritura hasta que se haga commit/rollback
             conn.execute("BEGIN EXCLUSIVE")
             
             try:
-                # Buscar el último NCF usado de este tipo para esta empresa
+                # Obtener o crear secuencia
                 cursor = conn.execute("""
-                    SELECT invoice_number 
-                    FROM invoices 
-                    WHERE company_id = ? 
-                      AND invoice_category = ?
-                      AND invoice_number LIKE ?
-                    ORDER BY invoice_number DESC
-                    LIMIT 1
-                """, (company_id, ncf_type, f"{ncf_type}%"))
+                    SELECT last_seq 
+                    FROM ncf_sequences 
+                    WHERE company_id = ? AND prefix3 = ?
+                """, (company_id, ncf_type))
                 
-                last_ncf_row = cursor.fetchone()
+                row = cursor.fetchone()
                 
-                if last_ncf_row:
-                    last_ncf = last_ncf_row[0]
-                    next_ncf = self._calculate_next_ncf(last_ncf, ncf_type)
+                if row:
+                    last_seq = row['last_seq']
                 else:
-                    # Primer NCF de este tipo
-                    next_ncf = f"{ncf_type}00000001"
+                    # Primera vez, sembrar con máximo histórico de invoices
+                    cursor = conn.execute("""
+                        SELECT invoice_number 
+                        FROM invoices 
+                        WHERE company_id = ? 
+                          AND invoice_category = ?
+                          AND invoice_number LIKE ?
+                        ORDER BY invoice_number DESC
+                        LIMIT 1
+                    """, (company_id, ncf_type, f"{ncf_type}%"))
+                    
+                    last_invoice = cursor.fetchone()
+                    if last_invoice:
+                        last_ncf = last_invoice['invoice_number']
+                        match = self.NCF_PATTERN.match(last_ncf)
+                        if match:
+                            _, number_str = match.groups()
+                            last_seq = int(number_str)
+                        else:
+                            last_seq = 0
+                    else:
+                        last_seq = 0
+                    
+                    # Crear registro de secuencia
+                    conn.execute("""
+                        INSERT INTO ncf_sequences (company_id, prefix3, last_seq, updated_at)
+                        VALUES (?, ?, ?, datetime('now'))
+                    """, (company_id, ncf_type, last_seq))
                 
-                # Verificar que el NCF no existe (doble verificación)
+                # Calcular siguiente NCF
+                next_seq = last_seq + 1
+                
+                if next_seq > 99999999:
+                    raise ValueError(f"Se agotaron los números de NCF para {ncf_type}")
+                
+                next_ncf = f"{ncf_type}{next_seq:08d}"
+                
+                # Doble verificación: asegurar que el NCF no existe en invoices
                 cursor = conn.execute("""
-                    SELECT COUNT(*) 
+                    SELECT COUNT(*) as count
                     FROM invoices 
                     WHERE company_id = ? AND invoice_number = ?
                 """, (company_id, next_ncf))
                 
-                count = cursor.fetchone()[0]
+                count = cursor.fetchone()['count']
                 if count > 0:
                     raise ValueError(f"NCF {next_ncf} ya existe (colisión detectada)")
+                
+                # Actualizar secuencia
+                conn.execute("""
+                    UPDATE ncf_sequences 
+                    SET last_seq = ?, updated_at = datetime('now')
+                    WHERE company_id = ? AND prefix3 = ?
+                """, (next_seq, company_id, ncf_type))
                 
                 # Commit de la transacción
                 conn.commit()
