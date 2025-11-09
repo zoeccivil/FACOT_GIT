@@ -85,3 +85,25 @@ def set_downloads_folder_path(path):
     config["downloads_folder_path"] = path
     set_empresa_config(empresa_id, empresa_cfg)
     save_config(config)
+
+# --- MODO DE CONEXIÓN PREFERIDO ---
+def get_connection_mode():
+    """
+    Obtiene el modo de conexión preferido guardado.
+    
+    Returns:
+        str: "SQLITE", "FIREBASE", o "AUTO" (default)
+    """
+    config = load_config()
+    return config.get("connection_mode", "AUTO")
+
+def set_connection_mode(mode):
+    """
+    Guarda el modo de conexión preferido.
+    
+    Args:
+        mode: "SQLITE", "FIREBASE", o "AUTO"
+    """
+    config = load_config()
+    config["connection_mode"] = mode.upper()
+    save_config(config)

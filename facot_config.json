@@ -1,5 +1,6 @@
 {
-  "db_path": "E:/Dropbox/GESTION FACTURAS/facturas_db.db",
+  "db_path": "D:/Dropbox/PROGAIN/FACOT_GIT/FACOT_GIT/facturas_db.db",
   "output_folder": "C:\\Users\\servi\\AppData\\Roaming\\FACOT\\output",
-  "downloads_folder_path": "C:\\Users\\servi\\AppData\\Roaming\\FACOT\\import"
+  "downloads_folder_path": "C:\\Users\\servi\\AppData\\Roaming\\FACOT\\import",
+  "connection_mode": "FIREBASE"
 }
