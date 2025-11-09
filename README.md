@@ -1,12 +1,37 @@
 # FACOT - Sistema de Gestión de Facturas y Cotizaciones
 
-![Versión](https://img.shields.io/badge/versión-2.0-blue.svg)
+![Versión](https://img.shields.io/badge/versión-2.1-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.8+-green.svg)
 ![Licencia](https://img.shields.io/badge/licencia-MIT-orange.svg)
+![Tests](https://img.shields.io/badge/tests-79%20passing-brightgreen.svg)
 
 ## 📋 Descripción
 
 FACOT es un sistema completo de gestión de facturas y cotizaciones diseñado para empresas en República Dominicana. El sistema ofrece una solución robusta para la administración de documentos fiscales, cumpliendo con las normativas de la DGII (Dirección General de Impuestos Internos).
+
+### 🆕 Novedades v2.1
+
+✨ **Sistema de Auditoría Completo**
+- Registro automático de todas las operaciones críticas
+- Historial completo de cambios en facturas
+- Trazabilidad total de NCF asignados
+
+✨ **NCF Sin Duplicados**
+- Transacciones BEGIN EXCLUSIVE (SQLite)
+- Validado con tests de concurrencia
+- Imposible generar NCF duplicados
+
+✨ **Sistema de Email Profesional**
+- Envío de facturas por email con adjuntos
+- Soporte SMTP/TLS y SendGrid
+- Registro de todos los envíos
+- Vista previa de emails
+
+✨ **79 Tests Automatizados**
+- Cobertura completa del backend
+- Tests de integración
+- Tests de concurrencia
+- CI/CD con GitHub Actions
 
 ### Características Principales
 
@@ -16,6 +41,8 @@ FACOT es un sistema completo de gestión de facturas y cotizaciones diseñado pa
 - Soporte para múltiples monedas (RD$, USD, EUR)
 - Cálculo automático de ITBIS (18%)
 - Conversión automática a pesos dominicanos
+- **🆕 NCF automático al crear facturas**
+- **🆕 Auditoría automática de cambios**
 
 ✅ **Gestión de Cotizaciones**
 - Creación de cotizaciones profesionales
@@ -28,7 +55,8 @@ FACOT es un sistema completo de gestión de facturas y cotizaciones diseñado pa
 - B04 - Nota de Crédito
 - B14 - Régimen Especial
 - B15 - Gubernamental
-- Numeración automática y secuencial
+- **🆕 Numeración segura sin duplicados (BEGIN EXCLUSIVE)**
+- **🆕 Tabla de secuencias persistente**
 
 ✅ **Arquitectura Dual: SQLite + Firebase**
 - **SQLite Local**: Para trabajo offline
@@ -87,12 +115,41 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-4. **Ejecutar la aplicación**
+4. **Migrar base de datos (NUEVO - v2.1)**
+```bash
+python scripts/migrate_db.py facturas_cotizaciones.db
+```
+
+5. **Ejecutar la aplicación**
 ```bash
 python main.py
 ```
 
+### 🚀 Inicio Rápido - Demo del Backend
+
+Prueba las nuevas funcionalidades de auditoría y NCF:
+
+```bash
+# Ver demo completo del backend
+python demo_backend.py
+```
+
+**Salida esperada:**
+```
+✅ 5 facturas creadas con NCF automático
+✅ Sin duplicados: True
+✅ 12 registros de auditoría
+✅ TODO FUNCIONANDO CORRECTAMENTE
+```
+
 ## 📚 Documentación
+
+### Documentación Técnica Nueva (v2.1)
+
+- **[Implementación Backend Completa](IMPLEMENTACION_BACKEND_COMPLETA.md)** - Resumen técnico completo
+- **[Guía de Integración Completa](GUIA_INTEGRACION_COMPLETA.md)** - Paso a paso para desarrolladores
+- **[Resumen de Implementación](RESUMEN_IMPLEMENTACION_FINAL.md)** - Detalles de PRs
+- **[Roadmap de Modernización](ROADMAP_MODERNIZACION.md)** - Plan de mejoras
 
 ### Documentación por Fases
 
