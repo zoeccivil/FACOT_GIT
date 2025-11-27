@@ -107,3 +107,68 @@ def set_connection_mode(mode):
     config = load_config()
     config["connection_mode"] = mode.upper()
     save_config(config)
+
+# --- CONFIGURACIÓN DE EMAIL (SMTP) ---
+def get_email_config():
+    """
+    Obtiene la configuración de email.
+    Prioriza variables de entorno sobre config guardado.
+    
+    Returns:
+        dict: Configuración de email con claves:
+            - smtp_host
+            - smtp_port
+            - smtp_user
+            - smtp_password
+            - smtp_use_tls
+            - smtp_from_email
+    """
+    # Priorizar variables de entorno (más seguro)
+    env_config = {
+        'smtp_host': os.getenv('SMTP_HOST'),
+        'smtp_port': int(os.getenv('SMTP_PORT', 587)),
+        'smtp_user': os.getenv('SMTP_USER'),
+        'smtp_password': os.getenv('SMTP_PASSWORD'),
+        'smtp_use_tls': os.getenv('SMTP_USE_TLS', 'true').lower() == 'true',
+        'smtp_from_email': os.getenv('SMTP_FROM_EMAIL'),
+    }
+    
+    # Si hay variables de entorno configuradas, usarlas
+    if env_config['smtp_host'] and env_config['smtp_user']:
+        return env_config
+    
+    # Fallback a configuración guardada (menos seguro)
+    config = load_config()
+    saved_config = config.get('email_config', {})
+    
+    return {
+        'smtp_host': saved_config.get('smtp_host', ''),
+        'smtp_port': saved_config.get('smtp_port', 587),
+        'smtp_user': saved_config.get('smtp_user', ''),
+        'smtp_password': saved_config.get('smtp_password', ''),  # NO RECOMENDADO
+        'smtp_use_tls': saved_config.get('smtp_use_tls', True),
+        'smtp_from_email': saved_config.get('smtp_from_email', ''),
+    }
+
+def set_email_config(email_cfg):
+    """
+    Guarda configuración de email en archivo.
+    
+    NOTA: No se recomienda guardar contraseñas en archivos.
+    Use variables de entorno en su lugar.
+    
+    Args:
+        email_cfg: dict con configuración de email
+    """
+    config = load_config()
+    config['email_config'] = email_cfg
+    save_config(config)
+
+def clear_email_password():
+    """
+    Elimina la contraseña guardada de la configuración.
+    """
+    config = load_config()
+    if 'email_config' in config and 'smtp_password' in config['email_config']:
+        del config['email_config']['smtp_password']
+        save_config(config)
