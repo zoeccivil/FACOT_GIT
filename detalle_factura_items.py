@@ -8,6 +8,13 @@ from PyQt6.QtCore import Qt
 # Lee la ruta de la BD desde la configuración
 import facot_config  # Debe exponer get_db_path()
 
+
+from PyQt6.QtWidgets import (
+    QHBoxLayout, QLineEdit, QTableView, QVBoxLayout,  # Cambiado QTableWidget por QTableView
+    QPushButton, QWidget, QLabel, QHeaderView, QMessageBox
+)
+from models.items_table_model import ItemsTableModel
+
 def get_db_path() -> str:
     return facot_config.get_db_path() or ""
 
